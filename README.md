@@ -11,13 +11,13 @@
 ## Features
 
 - An explicit repository list. Nothing is discovered.
-- Profiles for releases, workflows, issues, standards, and the reserved security check.
-- Profile inheritance, with per-profile standards rules that fall back to the config defaults.
+- Profiles for releases, workflows, issues, pull requests, and quality.
+- Profile inheritance. An explicit false overrides an inherited true.
 - A local SQLite cache, so lists and reports work offline.
-- Release, workflow, issue, and file checks that request only the page they need.
+- Release and workflow checks, without a file inventory or an issues list.
 - Human tables, JSON, CSV, and Markdown.
 - A terminal interface for the same cached view.
-- Dates in a configurable pattern. The default is `DD/MM/YYYY`.
+- Dates in a configurable pattern. The default is `DD/MM/YYYY HH:mm UTC`.
 - Authentication through the GitHub CLI. The token is not stored.
 
 ## Installation
@@ -80,9 +80,10 @@ github-intel repo show owner name
 
 | Command                          | Description                                      |
 | -------------------------------- | ------------------------------------------------ |
+| `github-intel config init`       | Write the default files. `--force` overwrites    |
 | `github-intel config validate`   | Load the files and report the repository count   |
 | `github-intel config paths`      | Print configuration and cache paths              |
-| `github-intel profile show NAME` | Show the checks and standards rules              |
+| `github-intel profile show NAME` | Show the effective checks                        |
 
 > **Note:** `--config FILE` selects a different main file. Without it, the files are `config.yml`, `profiles.yml`, and `repositories.yml` in `~/.config/github-intel/`.
 

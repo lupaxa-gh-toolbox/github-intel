@@ -22,6 +22,6 @@ The client retries rate limits and `500`, `502`, `503`, and `504`. It does not s
 ## Freshness
 
 Each category has its own window.
-Metadata, releases, workflow definitions, issues, and standards can be fresh independently.
+Metadata and releases can be fresh independently.
 The summary row that feeds the list columns uses the issues window.
-A change to stars or workflow state waits for that window or for `--force`.
+A change to stars or the workflow list waits for that window or for `--force`.

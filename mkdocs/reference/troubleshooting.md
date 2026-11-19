@@ -6,24 +6,19 @@ The profile has workflows turned off, or the summary was stored before that fiel
 A profile with workflows off shows `SKIPPED — Workflow checks are disabled.` in the detail.
 When workflows are on, run `github-intel sync --force` if the summary is still fresh.
 
-## Status Says FAIL and There Is No Release Date
-
-**FAIL** is a standards rule, usually a missing readme, licence, or `.gitignore`. A repository with no published release shows **No releases** in Status. The missing file remains in the detail.
-
 ## Last Push Is Blank
 
 The GitHub repository size is 0, so nothing has been pushed. GitHub can leave the size at 0 for a while after the first push. The date appears on a later sync, after GitHub updates the size.
 
-## Quality Is 0
+## Quality Is Unknown
 
-Zero means there are no open CodeQL alerts, or GitHub did not share the count. The column does not stay blank.
+**0** means there are no open alerts. **No scanning** means GitHub has no code scanning analysis. **Forbidden** means the token cannot read the alerts. **Unknown** means the count could not be read for another reason.
 
 ## Sync Looks Slow
 
 Each repository is a small set of requests, not a full history.
 The number printed beside the current repository is the running total for the whole sync.
-Standards uses one tree request.
-Workflows use one page of recent runs, plus one request for each workflow missing from that page.
+Workflows use one request for the workflow list. Run history is not requested.
 A GitHub rate limit does not freeze the display. The line says `waiting for GitHub rate limit, requests resume in` and the time until the next request is allowed. Ctrl+C cancels the sync instead of waiting that out.
 
 ## A Repository Is Unavailable

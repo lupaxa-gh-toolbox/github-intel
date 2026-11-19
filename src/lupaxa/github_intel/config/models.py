@@ -7,10 +7,13 @@ are rejected instead of being replaced.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+import re
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from lupaxa.github_intel.constants import CHECK_NAMES, DEFAULT_PROFILE, UNGROUPED
 from lupaxa.github_intel.dates import DEFAULT_DATE_FORMAT, require_date_format
+from lupaxa.github_intel.layout import parse_labels
 
 __all__ = [
     "AppConfig",
@@ -22,10 +25,11 @@ __all__ = [
     "LoggingSettings",
     "ProfileSpec",
     "RepositorySpec",
-    "StandardsOverride",
-    "StandardsSettings",
     "SyncSettings",
+    "ViewSettings",
 ]
+
+_VIEW_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 _LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
 
@@ -56,40 +60,6 @@ class FileSettings(_StrictModel):
     repositories: str = "repositories.yml"
 
 
-class StandardsSettings(_StrictModel):
-    """
-    Which standards rules run when a profile enables ``standards``.
-
-    A third-party profile leaves ``standards`` false, so these rules are
-    not applied to it.
-    """
-
-    readme: bool = True
-    licence: bool = True
-    gitignore: bool = True
-    workflows: bool = False
-    python_packaging: bool = False
-    mkdocs: bool = False
-    tests: bool = False
-
-
-class StandardsOverride(_StrictModel):
-    """
-    Standards rules set on one profile.
-
-    Omitted rules keep the value inherited from the config default or a
-    parent profile. A mapping turns the standards check on.
-    """
-
-    readme: bool | None = None
-    licence: bool | None = None
-    gitignore: bool | None = None
-    workflows: bool | None = None
-    python_packaging: bool | None = None
-    mkdocs: bool | None = None
-    tests: bool | None = None
-
-
 class CacheSettings(_StrictModel):
     """Per-category freshness windows, in seconds."""
 
@@ -98,7 +68,6 @@ class CacheSettings(_StrictModel):
     releases_ttl: int = Field(default=1800, ge=0)
     workflows_ttl: int = Field(default=900, ge=0)
     issues_ttl: int = Field(default=1800, ge=0)
-    standards_ttl: int = Field(default=86400, ge=0)
 
 
 class SyncSettings(_StrictModel):
@@ -127,7 +96,7 @@ class LoggingSettings(_StrictModel):
 
 
 class ProfileSpec(_StrictModel):
-    """One monitoring profile. Omitted checks are inherited or default to false."""
+    """One monitoring profile. Omitted checks are inherited or taken from defaults."""
 
     extends: str | None = None
     releases: bool | None = None
@@ -135,8 +104,6 @@ class ProfileSpec(_StrictModel):
     issues: bool | None = None
     pull_requests: bool | None = None
     quality: bool | None = None
-    standards: bool | StandardsOverride | None = None
-    security: bool | None = None
 
 
 class RepositorySpec(_StrictModel):
@@ -186,13 +153,14 @@ class RepositorySpec(_StrictModel):
 
 
 class DefaultsSettings(_StrictModel):
-    """Default profile name and the standards rules used when standards are on."""
+    """Default profile name and the check flags used when no profile sets them."""
 
     profile: str = DEFAULT_PROFILE
+    releases: bool = False
+    workflows: bool = False
     issues: bool = False
     pull_requests: bool = True
     quality: bool = True
-    standards: StandardsSettings = Field(default_factory=StandardsSettings)
 
     @field_validator("profile")
     @classmethod
@@ -204,15 +172,98 @@ class DefaultsSettings(_StrictModel):
         return text
 
 
+class ViewSettings(_StrictModel):
+    """One named list and/or detail layout."""
+
+    list: tuple[str, ...] | None = None
+    detail: tuple[str, ...] | None = None
+
+    @field_validator("list", mode="before")
+    @classmethod
+    def _list(cls, value: object) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        if not isinstance(value, (list, tuple)):
+            message = "list must be a list of field names."
+            raise ValueError(message)
+        labels: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                message = "list must be a list of field names."
+                raise ValueError(message)
+            labels.append(item)
+        return parse_labels(labels)
+
+    @field_validator("detail", mode="before")
+    @classmethod
+    def _detail(cls, value: object) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        if not isinstance(value, (list, tuple)):
+            message = "detail must be a list of field names."
+            raise ValueError(message)
+        labels: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                message = "detail must be a list of field names."
+                raise ValueError(message)
+            labels.append(item)
+        return parse_labels(labels)
+
+    @model_validator(mode="after")
+    def _requires_a_side(self) -> ViewSettings:
+        if self.list is None and self.detail is None:
+            message = "a view must define list and/or detail."
+            raise ValueError(message)
+        return self
+
+
 class DisplaySettings(_StrictModel):
-    """How dates are shown in tables and reports."""
+    """
+    How dates are shown, which view is selected, and the named views.
+
+    Attributes:
+        date_format: Pattern for dates in tables and reports.
+        view: Name of the selected view. ``default`` is always valid.
+        views: Named views, each with an optional list and detail.
+
+    """
 
     date_format: str = DEFAULT_DATE_FORMAT
+    view: str = "default"
+    views: dict[str, ViewSettings] = Field(default_factory=dict)
 
     @field_validator("date_format")
     @classmethod
     def _date_format(cls, value: str) -> str:
         return require_date_format(value)
+
+    @field_validator("view")
+    @classmethod
+    def _view(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("views")
+    @classmethod
+    def _views(cls, value: dict[str, ViewSettings]) -> dict[str, ViewSettings]:
+        rebuilt: dict[str, ViewSettings] = {}
+        for name, entry in value.items():
+            text = name.strip()
+            if not _VIEW_NAME.match(text):
+                message = f"invalid view name {name!r}."
+                raise ValueError(message)
+            if text in rebuilt:
+                message = f"duplicate view name {text!r}."
+                raise ValueError(message)
+            rebuilt[text] = entry
+        return rebuilt
+
+    @model_validator(mode="after")
+    def _active_view(self) -> DisplaySettings:
+        if self.view != "default" and self.view not in self.views:
+            message = f"unknown display view {self.view!r}."
+            raise ValueError(message)
+        return self
 
 
 class AppConfig(_StrictModel):

@@ -8,18 +8,10 @@ No. It watches `repositories.yml`. Adding a repository is a configuration change
 
 `defaults.profile` applies only where a repository omits `profile`. Set `profile` on the repositories that should use a different check set, and leave the default as `upstream`.
 
-## Can two profiles require different files?
-
-Yes. Put a `standards` map on the profile. Omitted rules inherit the parent profile, then `defaults.standards`.
-
 ## Does a private repository work over SSH?
 
 The GitHub API does not use an SSH key. The same GitHub account is used through `gh auth token`.
 
-## Are cancelled workflow runs failures?
+## Does a workflow run change Status?
 
-A cancelled, skipped, or neutral conclusion is reported as **Success**. **Failure** is `failure`, `timed_out`, or `startup_failure`.
-
-## Why does the security check never pass?
-
-It is not implemented. The row is always skipped, including when the profile turns security on. That skip does not mean the repository is secure.
+No. The workflow check lists the workflow files and each file's own state. It does not read run history.

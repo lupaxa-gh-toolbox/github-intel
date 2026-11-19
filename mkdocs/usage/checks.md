@@ -16,39 +16,40 @@ With no failure and no release check, Status is **Healthy**.
 | Unknown     | The compare could not be interpreted                             |
 | Error       | The releases request failed                                      |
 
+The list shows that word. The detail shows the sentence, and it does not put the word in front of the sentence.
+
 The release date is the publish date of that tag. Drafts are skipped.
 
 ## Workflows
 
-The check uses the newest of the per-workflow runs on the default branch.
+The check lists workflow files. It does not read run history. A missing or expired run is not a status.
 
-| Status       | Meaning                                                                 |
-| ------------ | ----------------------------------------------------------------------- |
-| Success      | The newest run completed without a failure conclusion                   |
-| Failure      | The conclusion is failure, timed out, or startup failure                |
-| In progress  | The newest run has not completed                                        |
-| Never run    | The repository has no matching run                                      |
-| Error        | The workflow list could not be read                                     |
+| Status             | Meaning                              |
+| ------------------ | ------------------------------------ |
+| No workflows found | The repository has no workflow files |
+| Error              | The workflow list could not be read  |
 
-The repository detail lists every workflow and the state of its latest run on the default branch. When the profile has workflows turned off, that row is `SKIPPED — Workflow checks are disabled.`
+The detail has one **Workflows** row. Each workflow is one line, and the states share a column: **Active**, **Manually Disabled**, **Inactivity Disabled**, **Fork Disabled**, or the state's own words.
+
+A missing state is **Unknown**. **Active** is green, a disabled state is dim, and **Unknown** is yellow. An empty list is **No workflows found**. When the profile has workflows turned off, the row is `SKIPPED — Workflow checks are disabled.`
 
 ## Issues
 
-When the profile sets `issues` false, the Issues column is left out of the list and the detail says `SKIPPED — Issue checks are disabled.`
+The default list does not include Issues. A written list leaves the cell blank when the check is off. The detail says `SKIPPED — Issue checks are disabled.`
 
-Open pull requests are not counted as issues. **Open** means the first page contained an issue. It is not a failure. The Issues column is the open-issue count from the repository record minus the open pull-request count.
+The Issues column is GitHub's `open_issues_count`. Open pull requests are not subtracted. The issues list is not requested.
 
 ## Pull Requests and Quality
 
-`pull_requests` and `quality` are on unless a profile sets them false. Off leaves that column out of the list. The detail says the check is skipped. `quality` is the open CodeQL alert count.
+`pull_requests` and `quality` are on unless a profile sets them false. The default list does not include those columns. A written list leaves the cell blank when the check is off. The detail says the check is skipped.
 
-## Standards
+`quality` is the open CodeQL alert count. **0** means there are none.
 
-Each enabled rule is **PASS**, **FAIL**, or **ERROR**. A rule left off is **SKIPPED**. **FAIL** and **ERROR** change Status unless the release result is **No releases**.
+**No scanning** means GitHub has no code scanning analysis, or Code Security is not enabled. **Forbidden** means the token cannot read the alerts. **Unknown** means the count could not be read for another reason.
 
-## Security
+Dependabot Alerts is the open Dependabot count. **0** means there are none.
 
-The security check is always skipped. Disabled profiles say `Security checks are disabled.` Enabled profiles say `Security checks are not implemented yet.` A skip is not a claim that the repository is secure.
+**Disabled** means Dependabot alerts are turned off. **Forbidden** means the token cannot read them. **Unknown** means the count could not be read for another reason.
 
 ## Status Before Any Check
 

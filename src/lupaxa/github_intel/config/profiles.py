@@ -9,16 +9,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from lupaxa.github_intel.config.models import (
-    ProfileSpec,
-    StandardsOverride,
-    StandardsSettings,
-)
+from lupaxa.github_intel.config.models import DefaultsSettings, ProfileSpec
 from lupaxa.github_intel.constants import CHECK_NAMES
 from lupaxa.github_intel.errors import ConfigError
 
 __all__ = [
     "ResolvedProfile",
+    "check_defaults",
     "resolve_profile",
 ]
 
@@ -31,15 +28,36 @@ class ResolvedProfile:
     chain: tuple[str, ...]
     enabled: dict[str, bool]
     sources: dict[str, str]
-    standards: StandardsSettings
+
+
+def check_defaults(settings: DefaultsSettings) -> dict[str, bool]:
+    """
+    Return the check flags from configuration.
+
+    Args:
+        settings: The ``defaults`` block.
+
+    Returns:
+        One value per check. A profile overrides these when it sets the flag.
+
+    """
+
+    return {
+        "releases": settings.releases,
+        "workflows": settings.workflows,
+        "issues": settings.issues,
+        "pull_requests": settings.pull_requests,
+        "quality": settings.quality,
+    }
 
 
 def resolve_profile(
     profiles: dict[str, ProfileSpec],
     name: str,
     overrides: dict[str, bool] | None = None,
-    standards: StandardsSettings | None = None,
     *,
+    releases: bool = False,
+    workflows: bool = False,
     issues: bool = False,
     pull_requests: bool = True,
     quality: bool = True,
@@ -51,7 +69,8 @@ def resolve_profile(
         profiles: Named profile definitions.
         name: Profile to resolve.
         overrides: Repository check overrides applied last.
-        standards: Rule defaults. Omitted profile rules keep these values.
+        releases: Used when no profile in the chain sets releases.
+        workflows: Used when no profile in the chain sets workflows.
         issues: Used when no profile in the chain sets issues.
         pull_requests: Used when no profile in the chain sets pull requests.
         quality: Used when no profile in the chain sets quality.
@@ -67,19 +86,19 @@ def resolve_profile(
     chain = _inheritance_chain(profiles, name)
     enabled = dict.fromkeys(CHECK_NAMES, False)
     sources = dict.fromkeys(CHECK_NAMES, "default")
-    rules = dict((standards or StandardsSettings()).model_dump())
     for profile_name in reversed(chain):
         spec = profiles[profile_name]
         _apply_profile(spec, profile_name, enabled, sources)
-        _apply_standard_rules(spec.standards, rules)
     defaults = {
+        "releases": releases,
+        "workflows": workflows,
         "issues": issues,
         "pull_requests": pull_requests,
         "quality": quality,
     }
-    for name, value in defaults.items():
-        if sources[name] == "default":
-            enabled[name] = value
+    for flag, value in defaults.items():
+        if sources[flag] == "default":
+            enabled[flag] = value
     for check, value in (overrides or {}).items():
         enabled[check] = value
         sources[check] = "repository"
@@ -88,7 +107,6 @@ def resolve_profile(
         chain=chain,
         enabled=enabled,
         sources=sources,
-        standards=StandardsSettings.model_validate(rules),
     )
 
 
@@ -123,17 +141,3 @@ def _apply_profile(
         if isinstance(value, bool):
             enabled[check] = value
             sources[check] = profile_name
-        elif value is not None:
-            enabled[check] = True
-            sources[check] = profile_name
-
-
-def _apply_standard_rules(
-    value: bool | StandardsOverride | None,
-    rules: dict[str, bool],
-) -> None:
-    if not isinstance(value, StandardsOverride):
-        return
-    for name, flag in value.model_dump().items():
-        if isinstance(flag, bool):
-            rules[name] = flag

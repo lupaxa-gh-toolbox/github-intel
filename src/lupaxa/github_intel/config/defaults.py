@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 __all__ = [
+    "generate_default_files",
     "write_default_files",
 ]
 
@@ -26,20 +27,16 @@ files:
 
 defaults:
   profile: upstream
+  releases: false
+  workflows: false
   issues: false
   pull_requests: true
   quality: true
-  standards:
-    readme: true
-    licence: true
-    gitignore: true
-    workflows: false
-    python_packaging: false
-    mkdocs: false
-    tests: false
 
 display:
-  date_format: DD/MM/YYYY
+  date_format: DD/MM/YYYY HH:mm UTC
+  view: default
+  views: {}
 
 sync:
   concurrency: 10
@@ -52,7 +49,6 @@ sync:
     releases_ttl: 1800
     workflows_ttl: 900
     issues_ttl: 1800
-    standards_ttl: 86400
 
 logging:
   level: INFO
@@ -64,14 +60,11 @@ profiles:
     releases: true
     workflows: false
     issues: false
-    standards: false
-    security: false
 
   maintained:
     extends: base
     workflows: true
     issues: true
-    standards: true
 
   upstream:
     extends: base
@@ -82,11 +75,10 @@ profiles:
 
   critical:
     extends: maintained
-    security: true
 """
 
 _REPOSITORIES = """\
-repositories: []
+organisations: []
 """
 
 
@@ -102,22 +94,46 @@ def write_default_files(directory: Path) -> Path:
 
     """
 
+    config = directory / "config.yml"
+    generate_default_files(
+        (config, directory / "profiles.yml", directory / "repositories.yml"),
+        force=False,
+    )
+    return config
+
+
+def generate_default_files(
+    paths: tuple[Path, Path, Path],
+    *,
+    force: bool,
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """
+    Write the shipped config, profiles, and repositories files.
+
+    Args:
+        paths: ``config.yml``, ``profiles.yml``, and ``repositories.yml``.
+        force: Replace files that already exist.
+
+    Returns:
+        The paths written, then the paths left unchanged.
+
+    """
+
+    directory = paths[0].parent
     created = not directory.exists()
     directory.mkdir(parents=True, exist_ok=True)
     if created:
         _restrict(directory)
-    config = directory / "config.yml"
-    _write_new(config, _CONFIG)
-    _write_new(directory / "profiles.yml", _PROFILES)
-    _write_new(directory / "repositories.yml", _REPOSITORIES)
-    return config
-
-
-def _write_new(path: Path, text: str) -> None:
-    if path.exists():
-        return
-    path.write_text(text, encoding="utf-8")
-    _restrict(path)
+    written: list[Path] = []
+    kept: list[Path] = []
+    for path, text in zip(paths, (_CONFIG, _PROFILES, _REPOSITORIES), strict=True):
+        if path.exists() and not force:
+            kept.append(path)
+            continue
+        path.write_text(text, encoding="utf-8")
+        _restrict(path)
+        written.append(path)
+    return tuple(written), tuple(kept)
 
 
 def _restrict(path: Path) -> None:

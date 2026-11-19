@@ -5,9 +5,11 @@
 `config.yml` can stay at the shipped defaults. `defaults.profile` is `upstream`.
 
 ```yaml
-repositories:
-  - repo: octocat/Hello-World
+organisations:
+  - name: octocat
     group: examples
+    repositories:
+      - Hello-World
 ```
 
 ```bash
@@ -25,28 +27,21 @@ Add the profile to `profiles.yml`. It does not replace `defaults.profile`, so re
     releases: true
     workflows: true
     issues: true
-    security: true
-    standards:
-      readme: true
-      licence: true
-      gitignore: true
-      workflows: false
-      python_packaging: false
-      mkdocs: false
-      tests: false
 ```
 
 Attach it on the repository, not on the default:
 
 ```yaml
-repositories:
-  - repo: lupaxa-gh-toolbox/github-intel
-    group: lupaxa-gh-toolbox
-    profile: project
+organisations:
+  - name: octocat
+    group: examples
+    repositories:
+      - name: Hello-World
+        profile: project
 ```
 
 ```bash
-github-intel repo set-profile lupaxa-gh-toolbox/github-intel project
+github-intel repo set-profile octocat/Hello-World project
 github-intel profile show project
 ```
 
@@ -54,7 +49,72 @@ github-intel profile show project
 
 ```yaml
 display:
-  date_format: YYYY-MM-DD
+  date_format: YYYY-MM-DD HH:mm
 ```
 
-Tables, the terminal interface, and Markdown reports use that pattern. JSON and CSV stay on `YYYY-MM-DD` from the stored value.
+Tables, the terminal interface, JSON, CSV, and Markdown use that pattern. Leave out `HH` and `mm` to show the date only. `ss` and `UTC` are optional with the time.
+
+## A Saved View
+
+```yaml
+display:
+  view: compact
+  views:
+    compact:
+      list:
+        - Repository
+        - Status
+      detail:
+        - Status
+        - Workflows
+```
+
+`display.view` selects the saved view. Omitted, it is `default`. `display.views` maps a name to `list`, `detail`, or both. The missing side stays the hardcoded layout. A written list shows every name, including a check that is off.
+
+```bash
+github-intel repo list --view compact
+```
+
+`--view` overrides the saved name for one command and does not write the file. An unknown name exits 2.
+
+## List Views
+
+A view can replace only the list. The detail stays the hardcoded layout.
+
+### Default
+
+When `default` does not set `list`, the columns are Organisation, Repository, Visibility, Language, Status, Version, Release date, and Enabled.
+
+### Popularity
+
+```yaml
+display:
+  views:
+    popularity:
+      list:
+        - Organisation
+        - Repository
+        - Stars
+        - Watchers
+        - Forks
+```
+
+### Releases
+
+```yaml
+display:
+  views:
+    releases:
+      list:
+        - Organisation
+        - Repository
+        - Version
+        - Release date
+```
+
+`Release date` is the field name. Stars, Watchers, and Forks are right-aligned.
+
+```bash
+github-intel repo list --view popularity
+github-intel repo list --view releases
+```

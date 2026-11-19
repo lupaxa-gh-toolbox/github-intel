@@ -7,6 +7,7 @@ Neither interface talks to GitHub or SQLite except through this service.
 from __future__ import annotations
 
 from collections.abc import Callable
+import contextlib
 from dataclasses import replace
 from pathlib import Path
 import time
@@ -26,7 +27,11 @@ from lupaxa.github_intel.config.paths import (
     data_directory,
     default_config_file,
 )
-from lupaxa.github_intel.config.profiles import ResolvedProfile, resolve_profile
+from lupaxa.github_intel.config.profiles import (
+    ResolvedProfile,
+    check_defaults,
+    resolve_profile,
+)
 from lupaxa.github_intel.errors import AuthError, ConfigError, NotFound, SyncTooSoon
 from lupaxa.github_intel.github.auth import github_cli_token
 from lupaxa.github_intel.github.client import GitHubClient
@@ -164,10 +169,7 @@ class Service:
             loaded.profiles,
             repository.profile or loaded.config.defaults.profile,
             repository.checks,
-            loaded.config.defaults.standards,
-            issues=loaded.config.defaults.issues,
-            pull_requests=loaded.config.defaults.pull_requests,
-            quality=loaded.config.defaults.quality,
+            **check_defaults(loaded.config.defaults),
         )
         return view, resolved, documents
 
@@ -338,6 +340,34 @@ class Service:
         """
 
         set_repository_fields(self._require_config(), repo, **fields)
+
+    def reset(self) -> tuple[Path, ...]:
+        """
+        Delete the cache files.
+
+        Configuration, profiles, and the repository list stay. The next sync
+        starts from an empty cache, including the sync interval.
+
+        Returns:
+            Files that were removed.
+
+        """
+
+        database = self._database().path
+        names = (
+            database,
+            Path(f"{database}-wal"),
+            Path(f"{database}-shm"),
+            Path(f"{database}-journal"),
+        )
+        removed: list[Path] = []
+        for path in names:
+            if path.is_file():
+                path.unlink()
+                removed.append(path)
+        with contextlib.suppress(OSError):
+            self.data_dir.rmdir()
+        return tuple(removed)
 
     async def clear_cache(self, repo: str | None) -> None:
         """

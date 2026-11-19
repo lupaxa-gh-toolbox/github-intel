@@ -9,8 +9,10 @@ On macOS and Linux the default directory is `~/.config/github-intel/`.
 | File               | Purpose                                         |
 | ------------------ | ----------------------------------------------- |
 | `config.yml`       | Defaults, display, sync limits, and log level   |
-| `profiles.yml`     | Named check sets and optional standards rules   |
+| `profiles.yml`     | Named check sets                                |
 | `repositories.yml` | Repositories, groups, profiles, and tags        |
+
+`github-intel config init` writes `config.yml`, `profiles.yml`, and `repositories.yml` filled with the defaults. A file that already exists is kept. `--force` replaces it with the default. When every file already exists, the command exits 2.
 
 `github-intel config paths` prints the resolved paths, including the cache.
 
@@ -24,6 +26,8 @@ A group is a label for the list. It does not change which checks run. One reposi
 
 A profile is the set of checks. A repository with no profile uses `defaults.profile`. The shipped default is `upstream`, which checks releases only.
 
+Every check has a true or false value under `defaults`. A profile overrides the checks it sets. The shipped defaults leave releases and workflows off, leave issues off, and leave pull requests and quality on.
+
 ## Shipped Profiles
 
 | Profile      | Checks                                              |
@@ -31,47 +35,25 @@ A profile is the set of checks. A repository with no profile uses `defaults.prof
 | `base`       | Releases                                            |
 | `upstream`   | Releases. This extends `base`.                      |
 | `watchlist`  | Releases and issues. This extends `upstream`.       |
-| `maintained` | Releases, workflows, issues, and standards          |
-| `critical`   | The `maintained` checks, plus the security check    |
+| `maintained` | Releases, workflows, and issues                     |
+| `critical`   | The same checks as `maintained`                     |
 
 An explicit `false` overrides an inherited `true`. `github-intel profile tree` prints the chain. `github-intel profile show NAME --resolved` shows which profile set each flag.
-
-## Standards Rules
-
-`standards: true` runs the standards check with the inherited rules.
-`standards: false` skips it.
-A mapping turns the check on and replaces only the rules you list.
-Anything omitted keeps the parent value.
-A profile that never sets a rule uses `defaults.standards` in `config.yml`.
-
-```yaml
-lupaxa-project:
-  releases: true
-  workflows: true
-  issues: true
-  security: true
-  standards:
-    readme: true
-    licence: true
-    gitignore: true
-    workflows: true
-```
-
-`workflows: true` beside the other checks is the Actions check. `standards.workflows` is a different setting: it asks whether `.github/workflows` exists.
 
 ## Repository Overrides
 
 A repository can turn one check on or off without editing the profile:
 
 ```yaml
-- repo: example/demo
-  group: example
-  profile: maintained
-  checks:
-    standards: false
+organisations:
+  - name: example
+    group: example
+    profile: maintained
+    repositories:
+      - name: demo
+        checks:
+          issues: false
 ```
-
-`checks` does not change individual standards rules. It only enables or disables the whole check.
 
 ## What Is Not Stored
 

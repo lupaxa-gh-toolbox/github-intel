@@ -20,7 +20,7 @@ pip install --upgrade lupaxa-github-intel
 
 ## GitHub CLI
 
-Private repositories, workflow runs, and security-style counts need a token. GitHub Intel runs `gh auth token` and uses that token for the request. It does not write the token into configuration, the cache, reports, or logs.
+Private repositories and alert counts need a token. GitHub Intel runs `gh auth token` and uses that token for the request. It does not write the token into configuration, the cache, reports, or logs.
 
 ```bash
 gh auth login

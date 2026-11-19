@@ -23,6 +23,7 @@ from lupaxa.github_intel.config.models import (
     RepositorySpec,
 )
 from lupaxa.github_intel.config.paths import default_config_file
+from lupaxa.github_intel.constants import UNGROUPED
 from lupaxa.github_intel.errors import ConfigError
 
 __all__ = [
@@ -261,43 +262,139 @@ def _load_profiles(path: Path) -> dict[str, ProfileSpec]:
     return profiles
 
 
+_ORG_KEYS = {"name", "group", "profile", "repositories"}
+_REPO_KEYS = {"name", "group", "profile", "tags", "enabled", "checks"}
+
+
 def _load_repositories(path: Path, default_profile: str) -> tuple[RepositorySpec, ...]:
     document = _read_document(path)
-    raw = document.get("repositories", [])
+    if "repositories" in document:
+        raise ConfigError(
+            f"{path} lists owners under organisations, each with its repositories.",
+        )
+    raw = document.get("organisations", [])
     if not isinstance(raw, list):
-        raise ConfigError(f"{path} repositories must be a list.")
+        raise ConfigError(f"{path} organisations must be a list.")
     repositories: list[RepositorySpec] = []
     seen: dict[str, str] = {}
+    owners: set[str] = set()
     for index, item in enumerate(raw):
-        spec = _one_repository(item, path, index, default_profile)
-        key = repository_key(spec.repo)
-        if key in seen:
-            raise ConfigError(
-                f"Duplicate repository {spec.repo} (already listed as {seen[key]})."
-            )
-        seen[key] = spec.repo
-        repositories.append(spec)
+        for spec in _one_organisation(item, path, index, default_profile, owners):
+            key = repository_key(spec.repo)
+            if key in seen:
+                raise ConfigError(
+                    f"Duplicate repository {spec.repo} (already listed as {seen[key]})."
+                )
+            seen[key] = spec.repo
+            repositories.append(spec)
     return tuple(repositories)
 
 
-def _one_repository(
+def _one_organisation(
     item: object,
     path: Path,
     index: int,
     default_profile: str,
-) -> RepositorySpec:
-    label = f"{path} repositories[{index}]"
-    if isinstance(item, str):
-        return _parse_model(
-            RepositorySpec,
-            {"repo": item, "profile": default_profile},
-            label,
+    owners: set[str],
+) -> list[RepositorySpec]:
+    label = f"{path} organisations[{index}]"
+    if not isinstance(item, dict):
+        raise ConfigError(f"{label} must be an object.")
+    unknown = sorted(set(item) - _ORG_KEYS)
+    if unknown:
+        raise ConfigError(f"{label} has unknown keys: {', '.join(unknown)}.")
+    raw_name = item.get("name")
+    if not isinstance(raw_name, str):
+        raise ConfigError(f"{label} name must be a GitHub organisation or user.")
+    owner = _owner_name(raw_name, label)
+    if owner.casefold() in owners:
+        raise ConfigError(f"Duplicate owner {owner}.")
+    owners.add(owner.casefold())
+    listed = item.get("repositories", [])
+    if not isinstance(listed, list):
+        raise ConfigError(f"{label} repositories must be a list.")
+    group = None
+    if "group" in item:
+        group = _optional_text(item.get("group"), f"{label} group")
+    profile = None
+    if "profile" in item:
+        profile = _optional_text(item.get("profile"), f"{label} profile")
+    specs: list[RepositorySpec] = []
+    for repo_index, entry in enumerate(listed):
+        specs.append(
+            _named_repository(
+                entry,
+                path,
+                index,
+                repo_index,
+                owner,
+                group,
+                profile,
+                default_profile,
+            ),
         )
-    if isinstance(item, dict):
-        body = dict(item)
-        body.setdefault("profile", default_profile)
-        return _parse_model(RepositorySpec, body, label)
-    raise ConfigError(f"{label} must be owner/name or an object.")
+    return specs
+
+
+def _named_repository(
+    item: object,
+    path: Path,
+    org_index: int,
+    index: int,
+    owner: str,
+    org_group: str | None,
+    org_profile: str | None,
+    default_profile: str,
+) -> RepositorySpec:
+    label = f"{path} organisations[{org_index}].repositories[{index}]"
+    if isinstance(item, str):
+        return RepositorySpec(
+            repo=_canonical(owner, item, label),
+            group=org_group or UNGROUPED,
+            profile=org_profile or default_profile,
+        )
+    if not isinstance(item, dict):
+        raise ConfigError(f"{label} must be a repository name or an object.")
+    unknown = sorted(set(item) - _REPO_KEYS)
+    if unknown:
+        raise ConfigError(f"{label} has unknown keys: {', '.join(unknown)}.")
+    raw_name = item.get("name")
+    if not isinstance(raw_name, str):
+        raise ConfigError(f"{label} name must be a repository name.")
+    body: dict[str, Any] = {
+        "repo": _canonical(owner, raw_name, label),
+        "group": _chosen_text(item, "group", org_group) or UNGROUPED,
+        "profile": _chosen_text(item, "profile", org_profile) or default_profile,
+    }
+    for key in ("tags", "enabled", "checks"):
+        if key in item:
+            body[key] = item[key]
+    return _parse_model(RepositorySpec, body, label)
+
+
+def _owner_name(value: str, label: str) -> str:
+    canonical = _canonical(value, "name", label)
+    owner, _, _name = canonical.partition("/")
+    return owner
+
+
+def _canonical(owner: str, name: str, label: str) -> str:
+    try:
+        return RepositorySpec(repo=f"{owner}/{name}").repo
+    except ValidationError as exc:
+        raise ConfigError(f"{label} must be a repository name.") from exc
+
+
+def _optional_text(value: object, label: str) -> str:
+    if not isinstance(value, str) or value.strip() == "":
+        raise ConfigError(f"{label} must be text.")
+    return value.strip()
+
+
+def _chosen_text(item: dict[str, Any], key: str, inherited: str | None) -> str | None:
+    if key not in item:
+        return inherited
+    return _optional_text(item[key], key)
 
 
 def _require_known_profiles(

@@ -5,10 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 import time
 
+from rich.text import Text
+
 from lupaxa.github_intel.config.loader import LoadedConfig
 from lupaxa.github_intel.config.models import RepositorySpec
-from lupaxa.github_intel.config.profiles import resolve_profile
-from lupaxa.github_intel.dates import DEFAULT_DATE_FORMAT, format_date
+from lupaxa.github_intel.config.profiles import check_defaults, resolve_profile
+from lupaxa.github_intel.dates import (
+    DEFAULT_DATE_FORMAT,
+    format_date,
+    format_timestamp,
+    normalize_instant,
+)
 from lupaxa.github_intel.storage.database import Document, StoredCheck
 from lupaxa.github_intel.sync.summary import (
     ahead_count,
@@ -21,11 +28,16 @@ __all__ = [
     "RepositoryView",
     "build_view",
     "detail_rows",
+    "field_text",
     "metric_cells",
     "metric_columns",
+    "quality_text",
     "select_repositories",
     "split_identifier",
     "status_style",
+    "visibility_style",
+    "visibility_text",
+    "workflow_text",
 ]
 
 
@@ -48,9 +60,20 @@ class RepositoryView:
     version: str
     open_pulls: int | None
     open_issues: int | None
-    codeql: int
+    codeql: int | None
+    codeql_reason: str
     archived: bool
     last_push: str
+    default_branch: str
+    homepage: str
+    language: str
+    topics: tuple[str, ...]
+    fork: bool
+    forks: int | None
+    watchers: int | None
+    created: str
+    github_updated: str
+    size: int | None
     stars: int | None
     licence: str
     release_date: str
@@ -61,7 +84,8 @@ class RepositoryView:
     issues_enabled: bool
     pull_requests_enabled: bool
     quality_enabled: bool
-    dependencies: int
+    dependencies: int | None
+    dependencies_reason: str
 
 
 def build_view(
@@ -97,11 +121,9 @@ def build_view(
         loaded.profiles,
         profile_name,
         repository.checks,
-        loaded.config.defaults.standards,
-        issues=loaded.config.defaults.issues,
-        pull_requests=loaded.config.defaults.pull_requests,
-        quality=loaded.config.defaults.quality,
+        **check_defaults(loaded.config.defaults),
     )
+    checks = _shown_checks(checks)
     ahead = _ahead(summary, documents)
     return RepositoryView(
         repo=repository.repo,
@@ -120,8 +142,19 @@ def build_view(
         open_pulls=_whole(summary, "open_pulls"),
         open_issues=_whole(summary, "open_issues"),
         codeql=_quality(summary),
+        codeql_reason=_codeql_reason(summary),
         archived=_archived(body),
         last_push=_last_push(body),
+        default_branch=_default_branch(body),
+        homepage=_body_text(body, "homepage"),
+        language=_body_text(body, "language"),
+        topics=_topics(body),
+        fork=_flag(body, "fork"),
+        forks=_body_whole(body, "forks_count"),
+        watchers=_body_whole(body, "subscribers_count"),
+        created=_body_day(body, "created_at"),
+        github_updated=_body_day(body, "updated_at"),
+        size=_body_whole(body, "size"),
         stars=_stars(body),
         licence=_licence(body),
         release_date=_release_date(summary, documents),
@@ -133,66 +166,238 @@ def build_view(
         pull_requests_enabled=resolved.enabled["pull_requests"],
         quality_enabled=resolved.enabled["quality"],
         dependencies=_dependencies(summary),
+        dependencies_reason=_dependencies_reason(summary),
     )
+
+
+def field_text(
+    view: RepositoryView,
+    label: str,
+    date_format: str,
+    *,
+    detail: bool,
+) -> str:
+    """
+    Return one catalogue cell.
+
+    Args:
+        view: Repository to describe.
+        label: Catalogue field name.
+        date_format: Pattern such as ``DD/MM/YYYY HH:mm UTC``.
+        detail: Use the detail wording for a skipped check. Status is the
+            short word on the list and the release sentence on the detail.
+
+    Returns:
+        The cell text. A disabled list check is blank, except Workflows,
+        which stays ``SKIPPED — …`` on the list as well.
+
+    """
+
+    org, name = split_identifier(view.repo)
+    cells = {
+        "Organisation": org,
+        "Repository": name,
+        "Visibility": view.visibility,
+        "Description": view.description or "No description",
+        "Homepage": view.homepage,
+        "Language": view.language,
+        "Topics": ", ".join(view.topics),
+        "Group": view.group,
+        "Profile": view.profile,
+        "Tags": ", ".join(view.tags),
+        "Enabled": _yes_no(view.enabled),
+        "Status": view.status if not detail else _status_and_checks(view)[0],
+        "Cache": ", ".join(view.statuses),
+        "Archived": _yes_no(view.archived),
+        "Fork": _yes_no(view.fork),
+        "Forks": format_count(view.forks),
+        "Last push": format_date(view.last_push, date_format),
+        "Created": format_date(view.created, date_format),
+        "Updated": format_date(view.github_updated, date_format),
+        "Synchronised": format_timestamp(view.updated_at, date_format),
+        "Default branch": view.default_branch,
+        "Size": "" if view.size is None else f"{view.size} KB",
+        "Stars": format_count(view.stars),
+        "Watchers": format_count(view.watchers),
+        "Licence": view.licence,
+        "Version": view.version,
+        "Release date": format_date(view.release_date, date_format),
+        "Ahead": format_count(view.ahead),
+        "Workflows": _workflow_rows(view)[0][1],
+        "Dependabot Alerts": _dependabot_text(view),
+    }
+    if label in cells:
+        return cells[label]
+    if label == "Pull requests":
+        return _listed_count(
+            label,
+            view.pull_requests_enabled,
+            view.open_pulls,
+            "Pull request checks are disabled.",
+            detail=detail,
+        )
+    if label == "Issues":
+        return _listed_count(
+            label,
+            view.issues_enabled,
+            view.open_issues,
+            "Issue checks are disabled.",
+            detail=detail,
+        )
+    if label == "Quality":
+        if detail:
+            return _count_row(
+                label,
+                view.quality_enabled,
+                view.codeql,
+                "Quality checks are disabled.",
+                unknown=view.codeql_reason or "Unknown",
+            )[1]
+        return quality_text(view.quality_enabled, view.codeql, view.codeql_reason)
+    message = f"unknown display field {label!r}."
+    raise ValueError(message)
+
+
+def _listed_count(
+    label: str,
+    enabled: bool,
+    value: int | None,
+    reason: str,
+    *,
+    detail: bool,
+) -> str:
+    if detail:
+        return _count_row(label, enabled, value, reason)[1]
+    if not enabled:
+        return ""
+    return format_count(value)
 
 
 def detail_rows(
     view: RepositoryView,
     *,
     date_format: str = DEFAULT_DATE_FORMAT,
+    fields: tuple[str, ...] | None = None,
 ) -> tuple[tuple[str, str], ...]:
     """
     Return the field and value rows for one repository.
 
     Args:
         view: Repository to describe.
-        date_format: Pattern such as ``DD/MM/YYYY``.
+        date_format: Pattern such as ``DD/MM/YYYY HH:mm UTC``.
+        fields: Catalogue labels to show. ``None`` keeps every current row.
 
     Returns:
         Ordered pairs for the detail table.
 
     """
 
+    if fields is not None:
+        selected: list[tuple[str, str]] = []
+        if view.metadata_error:
+            selected.append(("Metadata error", view.metadata_error))
+        selected.extend(
+            (label, field_text(view, label, date_format, detail=True))
+            for label in fields
+        )
+        return tuple(selected)
+
     org, name = split_identifier(view.repo)
     status, checks = _status_and_checks(view)
-    rows = [
-        ("Org", org),
-        ("Repo", name),
-        ("Visibility", view.visibility),
-        ("Description", view.description or "No description"),
-        ("Group", view.group),
-        ("Profile", view.profile),
-        ("Status", status),
-        ("Archived", "yes" if view.archived else "no"),
-        ("Last push", format_date(view.last_push, date_format)),
-        ("Stars", format_count(view.stars)),
-        ("Licence", view.licence),
-        ("Version", view.version),
-        ("Release date", format_date(view.release_date, date_format)),
-        ("Ahead", format_count(view.ahead)),
-        _count_row(
-            "Pull requests",
-            view.pull_requests_enabled,
-            view.open_pulls,
-            "Pull request checks are disabled.",
-        ),
-        _count_row(
-            "Issues",
-            view.issues_enabled,
-            view.open_issues,
-            "Issue checks are disabled.",
-        ),
-        _count_row(
-            "Quality",
-            view.quality_enabled,
-            view.codeql,
-            "Quality checks are disabled.",
-        ),
-        *_workflow_rows(view),
-        ("Dependencies", str(view.dependencies)),
-        *checks,
-    ]
+    rows = []
+    if view.metadata_error:
+        rows.append(("Metadata error", view.metadata_error))
+    rows.extend(
+        [
+            ("Organisation", org),
+            ("Repository", name),
+            ("Visibility", view.visibility),
+            ("Description", view.description or "No description"),
+            ("Homepage", view.homepage),
+            ("Language", view.language),
+            ("Topics", ", ".join(view.topics)),
+            ("Group", view.group),
+            ("Profile", view.profile),
+            ("Tags", ", ".join(view.tags)),
+            ("Enabled", _yes_no(view.enabled)),
+            ("Status", status),
+            ("Cache", ", ".join(view.statuses)),
+            ("Archived", _yes_no(view.archived)),
+            ("Fork", _yes_no(view.fork)),
+            ("Forks", format_count(view.forks)),
+            ("Last push", format_date(view.last_push, date_format)),
+            ("Created", format_date(view.created, date_format)),
+            ("Updated", format_date(view.github_updated, date_format)),
+            ("Synchronised", format_timestamp(view.updated_at, date_format)),
+            ("Default branch", view.default_branch),
+            ("Size", "" if view.size is None else f"{view.size} KB"),
+            ("Stars", format_count(view.stars)),
+            ("Watchers", format_count(view.watchers)),
+            ("Licence", view.licence),
+            ("Version", view.version),
+            ("Release date", format_date(view.release_date, date_format)),
+            ("Ahead", format_count(view.ahead)),
+            _count_row(
+                "Pull requests",
+                view.pull_requests_enabled,
+                view.open_pulls,
+                "Pull request checks are disabled.",
+            ),
+            _count_row(
+                "Issues",
+                view.issues_enabled,
+                view.open_issues,
+                "Issue checks are disabled.",
+            ),
+            _count_row(
+                "Quality",
+                view.quality_enabled,
+                view.codeql,
+                "Quality checks are disabled.",
+                unknown=view.codeql_reason or "Unknown",
+            ),
+            *_workflow_rows(view),
+            ("Dependabot Alerts", _dependabot_text(view)),
+            *checks,
+        ]
+    )
     return tuple(rows)
+
+
+def visibility_style(value: str) -> str:
+    """
+    Choose a colour for a visibility word.
+
+    Args:
+        value: ``public``, ``private``, ``internal``, or empty.
+
+    Returns:
+        ``green``, ``magenta``, ``cyan``, or an empty string.
+
+    """
+
+    return {"public": "green", "private": "magenta", "internal": "cyan"}.get(
+        value.strip().casefold(),
+        "",
+    )
+
+
+def visibility_text(value: str) -> str | Text:
+    """
+    Colour a visibility word.
+
+    Args:
+        value: ``public``, ``private``, ``internal``, or empty.
+
+    Returns:
+        Styled text, or the plain word when it has no colour.
+
+    """
+
+    style = visibility_style(value)
+    if not style:
+        return value
+    return Text(value, style=style)
 
 
 def status_style(value: str) -> str:
@@ -203,19 +408,25 @@ def status_style(value: str) -> str:
         value: Status text, or a detail value that starts with one.
 
     Returns:
-        ``green``, ``yellow``, ``red``, ``dim``, or an empty string.
+        ``green``, ``cyan``, ``yellow``, ``red``, ``dim``, or an empty string.
 
     """
 
     label = value.split(" — ", 1)[0].strip().casefold()
-    if label in {"current", "healthy", "success"}:
+    if label in {"active", "current", "healthy", "success"}:
         return "green"
-    if label.endswith(" ahead") or label in {"no releases", "unknown", "in progress"}:
+    if label == "no releases":
+        return "cyan"
+    if label == "no scanning":
+        return "dim"
+    if label.endswith(" ahead") or label in {"unknown", "forbidden", "in progress"}:
         return "yellow"
     if label in {"fail", "error", "failure", "unavailable"}:
         return "red"
-    if label in {"disabled", "not synchronised", "never run"} or label.startswith(
-        "skipped",
+    if (
+        "disabled" in label
+        or label in {"not synchronised", "never run"}
+        or label.startswith("skipped")
     ):
         return "dim"
     return ""
@@ -283,6 +494,15 @@ def select_repositories(
     return tuple(chosen)
 
 
+def _shown_checks(checks: list[StoredCheck]) -> list[StoredCheck]:
+    return [
+        item
+        for item in checks
+        if item.name not in {"issues", "security"}
+        and not item.name.startswith("standards:")
+    ]
+
+
 def _statuses(
     repository: RepositorySpec,
     metadata: Document | None,
@@ -346,8 +566,49 @@ def _text(summary: dict[str, object], key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _yes_no(value: bool) -> str:
+    return "yes" if value else "no"
+
+
+def _flag(body: object, key: str) -> bool:
+    return isinstance(body, dict) and body.get(key) is True
+
+
+def _body_day(body: object, key: str) -> str:
+    return normalize_instant(_body_text(body, key))
+
+
+def _body_text(body: object, key: str) -> str:
+    if not isinstance(body, dict):
+        return ""
+    value = body.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _body_whole(body: object, key: str) -> int | None:
+    if not isinstance(body, dict):
+        return None
+    return _whole({key: body.get(key)}, key)
+
+
+def _topics(body: object) -> tuple[str, ...]:
+    if not isinstance(body, dict):
+        return ()
+    value = body.get("topics")
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str) and item)
+
+
 def _archived(body: object) -> bool:
-    return isinstance(body, dict) and body.get("archived") is True
+    return _flag(body, "archived")
+
+
+def _default_branch(body: object) -> str:
+    if not isinstance(body, dict):
+        return ""
+    branch = body.get("default_branch")
+    return branch if isinstance(branch, str) else ""
 
 
 def _last_push(body: object) -> str:
@@ -356,7 +617,7 @@ def _last_push(body: object) -> str:
     # GitHub sets pushed_at when it creates an empty repository.
     if body.get("size") == 0:
         return ""
-    return _calendar_day(body.get("pushed_at"))
+    return normalize_instant(body.get("pushed_at"))
 
 
 def _visibility(body: object) -> str:
@@ -394,12 +655,14 @@ def _licence(body: object) -> str:
 
 
 def _release_date(summary: dict[str, object], documents: list[Document]) -> str:
+    releases = _document(documents, "releases")
+    if releases is not None and not releases.error:
+        published = latest_published(releases.json_body())
+        if published:
+            return published
     if "release_date" in summary:
         return _text(summary, "release_date")
-    releases = _document(documents, "releases")
-    if releases is None or releases.error:
-        return ""
-    return latest_published(releases.json_body())
+    return ""
 
 
 def _ahead(summary: dict[str, object], documents: list[Document]) -> int | None:
@@ -471,9 +734,35 @@ def metric_cells(view: RepositoryView, columns: tuple[str, ...]) -> tuple[str, .
             format_count(view.open_pulls) if view.pull_requests_enabled else ""
         ),
         "Issues": format_count(view.open_issues) if view.issues_enabled else "",
-        "Quality": format_count(view.codeql) if view.quality_enabled else "",
+        "Quality": quality_text(
+            view.quality_enabled,
+            view.codeql,
+            view.codeql_reason,
+        ),
     }
     return tuple(values[column] for column in columns)
+
+
+def quality_text(enabled: bool, count: int | None, reason: str = "") -> str:
+    """
+    Return the Quality cell.
+
+    Args:
+        enabled: The profile includes the quality check.
+        count: Open CodeQL alerts, or None when GitHub did not share them.
+        reason: Why the count is missing. Empty means ``Unknown``.
+
+    Returns:
+        A blank cell when the check is off, the reason when the count is
+        missing, or the decimal count.
+
+    """
+
+    if not enabled:
+        return ""
+    if count is None:
+        return reason or "Unknown"
+    return str(count)
 
 
 def _count_row(
@@ -481,9 +770,13 @@ def _count_row(
     enabled: bool,
     value: int | None,
     reason: str,
+    *,
+    unknown: str = "",
 ) -> tuple[str, str]:
     if not enabled:
         return label, f"SKIPPED — {reason}"
+    if value is None and unknown:
+        return label, unknown
     return label, format_count(value)
 
 
@@ -498,25 +791,58 @@ def _status_and_checks(view: RepositoryView) -> tuple[str, tuple[tuple[str, str]
             shown = _release_label(item.status, view.ahead)
         text = f"{shown} — {item.summary}"
         if item.name == "releases" and shown == view.status:
-            status = text
+            status = item.summary or shown
+            continue
+        if item.name == "workflows":
             continue
         rows.append((_check_label(item.name), text))
     return status, tuple(rows)
 
 
 def _check_label(name: str) -> str:
-    columns = {"releases": "Status"}
-    return columns.get(name, f"Check {name}")
+    return f"Check {name}"
 
 
 def _workflow_rows(view: RepositoryView) -> tuple[tuple[str, str], ...]:
     if not view.workflows_enabled:
-        return (("Workflow", "SKIPPED — Workflow checks are disabled."),)
-    if view.workflows is None:
-        return (("Workflow", view.workflow),)
+        return (("Workflows", "SKIPPED — Workflow checks are disabled."),)
+    failed = next(
+        (item for item in view.checks if item.name == "workflows" and item.failure),
+        None,
+    )
+    if failed is not None:
+        return (("Workflows", f"{failed.status} — {failed.summary}"),)
     if not view.workflows:
-        return (("Workflows", "No workflows"),)
-    return tuple((f"Workflow {name}", status) for name, status in view.workflows)
+        return (("Workflows", "No workflows found"),)
+    return (("Workflows", _workflow_table(view.workflows)),)
+
+
+def workflow_text(workflows: tuple[tuple[str, str], ...]) -> Text:
+    """
+    Return the workflow list with each state coloured.
+
+    Args:
+        workflows: Name and state pairs, already sorted.
+
+    Returns:
+        A monospaced block. Names share a width and states share a column.
+
+    """
+
+    if not workflows:
+        return Text("No workflows found")
+    width = max(len(name) for name, _status in workflows)
+    text = Text()
+    for index, (name, status) in enumerate(workflows):
+        if index:
+            text.append("\n")
+        text.append(f"{name:<{width}}  ")
+        text.append(status, style=status_style(status) or None)
+    return text
+
+
+def _workflow_table(workflows: tuple[tuple[str, str], ...]) -> str:
+    return workflow_text(workflows).plain
 
 
 def _workflow(summary: dict[str, object], documents: list[Document]) -> str:
@@ -528,26 +854,32 @@ def _workflow(summary: dict[str, object], documents: list[Document]) -> str:
     return workflow_label(document.json_body(), failed=document.error is not None)
 
 
-def _dependencies(summary: dict[str, object]) -> int:
-    value = _whole(summary, "dependencies")
-    if value is None:
-        return 0
-    return value
+def _dependabot_text(view: RepositoryView) -> str:
+    if view.dependencies is None:
+        return view.dependencies_reason or "Unknown"
+    return str(view.dependencies)
 
 
-def _calendar_day(value: object) -> str:
-    if not isinstance(value, str) or len(value) < 10:
+def _dependencies(summary: dict[str, object]) -> int | None:
+    if "dependencies" not in summary:
+        return None
+    return _whole(summary, "dependencies")
+
+
+def _dependencies_reason(summary: dict[str, object]) -> str:
+    if _dependencies(summary) is not None:
         return ""
-    if value[4] != "-" or value[7] != "-":
+    return _text(summary, "dependencies_reason")
+
+
+def _quality(summary: dict[str, object]) -> int | None:
+    return _whole(summary, "codeql")
+
+
+def _codeql_reason(summary: dict[str, object]) -> str:
+    if _quality(summary) is not None:
         return ""
-    return value[:10]
-
-
-def _quality(summary: dict[str, object]) -> int:
-    value = _whole(summary, "codeql")
-    if value is None:
-        return 0
-    return value
+    return _text(summary, "codeql_reason")
 
 
 def _whole(summary: dict[str, object], key: str) -> int | None:

@@ -17,28 +17,21 @@ from typing import Any
 from urllib.parse import quote
 
 from lupaxa.github_intel.checks.base import CheckResult
-from lupaxa.github_intel.checks.issues import evaluate_issues, issue_records
 from lupaxa.github_intel.checks.releases import evaluate_releases
-from lupaxa.github_intel.checks.security import evaluate_security
-from lupaxa.github_intel.checks.standards import (
-    STANDARD_PATHS,
-    evaluate_standards,
-    tree_statuses,
-)
 from lupaxa.github_intel.checks.workflows import evaluate_workflows
 from lupaxa.github_intel.config.loader import LoadedConfig
-from lupaxa.github_intel.config.models import RepositorySpec, StandardsSettings
-from lupaxa.github_intel.config.profiles import resolve_profile
+from lupaxa.github_intel.config.models import RepositorySpec
+from lupaxa.github_intel.config.profiles import check_defaults, resolve_profile
 from lupaxa.github_intel.github.client import FetchResult, GitHubClient
 from lupaxa.github_intel.storage.database import Database, Document, StoredCheck
 from lupaxa.github_intel.sync.summary import (
     ahead_count,
+    codeql_reading,
     collection_count,
+    dependabot_reading,
     issue_count,
     latest_published,
     latest_tag,
-    newest_run,
-    run_state,
     workflow_definitions,
 )
 
@@ -185,10 +178,7 @@ async def _refresh(
         loaded.profiles,
         repository.profile or loaded.config.defaults.profile,
         repository.checks,
-        loaded.config.defaults.standards,
-        issues=loaded.config.defaults.issues,
-        pull_requests=loaded.config.defaults.pull_requests,
-        quality=loaded.config.defaults.quality,
+        **check_defaults(loaded.config.defaults),
     )
     metadata = await _category(
         database,
@@ -211,41 +201,20 @@ async def _refresh(
             ),
         )
     workflow_states: list[dict[str, str]] | None = None
-    workflow_headline = "Never run"
+    workflow_headline = "No workflows"
     if resolved.enabled["workflows"]:
-        workflow_states, newest = await _workflow_inventory(
+        workflow_states = await _workflow_inventory(
             client,
             repository.repo,
-            str(meta.get("default_branch") or ""),
             report,
             lock,
         )
-        if workflow_states is None:
-            checks.append(evaluate_workflows(None, "Could not list workflows."))
-            workflow_headline = "Unknown"
-        else:
-            latest = [newest] if newest is not None else []
-            checks.append(evaluate_workflows(latest, None))
-            workflow_headline = run_state(newest)
-    if resolved.enabled["issues"]:
-        checks.append(
-            await _issues(loaded, database, client, repository, force, report, lock),
+        result = evaluate_workflows(
+            workflow_states,
+            None if workflow_states is not None else "Could not list workflows.",
         )
-    if resolved.enabled["standards"]:
-        checks.extend(
-            await _standards(
-                loaded,
-                database,
-                client,
-                repository,
-                str(meta.get("default_branch") or "HEAD"),
-                force,
-                report,
-                lock,
-                resolved.standards,
-            ),
-        )
-    checks.append(evaluate_security(enabled=resolved.enabled["security"]))
+        checks.append(result)
+        workflow_headline = result.status
     await _summary(
         loaded,
         database,
@@ -258,7 +227,7 @@ async def _refresh(
         lock,
         workflow_headline,
         workflow_states,
-        resolved.enabled["pull_requests"] or resolved.enabled["issues"],
+        resolved.enabled["pull_requests"],
         resolved.enabled["quality"],
         resolved.enabled["issues"],
     )
@@ -328,148 +297,6 @@ async def _releases(
     )
 
 
-async def _issues(
-    loaded: LoadedConfig,
-    database: Database,
-    client: GitHubClient,
-    repository: RepositorySpec,
-    force: bool,
-    report: SyncReport,
-    lock: asyncio.Lock,
-) -> CheckResult:
-    document = await _category(
-        database,
-        client,
-        repository.repo,
-        "issues",
-        f"/repos/{repository.repo}/issues",
-        loaded.config.sync.cache.issues_ttl,
-        force,
-        loaded.config.sync.cache.enabled,
-        report,
-        lock,
-        params={"state": "open", "per_page": "30", "sort": "updated"},
-    )
-    records = issue_records(
-        _list(document) if document and document.error is None else None,
-    )
-    total = None if document is None or document.error else len(records)
-    return evaluate_issues(total, None if document is None else document.error)
-
-
-async def _standards(
-    loaded: LoadedConfig,
-    database: Database,
-    client: GitHubClient,
-    repository: RepositorySpec,
-    branch: str,
-    force: bool,
-    report: SyncReport,
-    lock: asyncio.Lock,
-    rules: StandardsSettings,
-) -> list[CheckResult]:
-    enabled_rules = {name for name, enabled in rules.model_dump().items() if enabled}
-    wanted = tuple(
-        path
-        for name, group in STANDARD_PATHS.items()
-        if name in enabled_rules
-        for path in group
-    )
-    statuses = await _standard_statuses(
-        loaded,
-        database,
-        client,
-        repository.repo,
-        branch,
-        wanted,
-        force,
-        report,
-        lock,
-    )
-    return evaluate_standards(rules, statuses)
-
-
-async def _standard_statuses(
-    loaded: LoadedConfig,
-    database: Database,
-    client: GitHubClient,
-    repo: str,
-    branch: str,
-    wanted: tuple[str, ...],
-    force: bool,
-    report: SyncReport,
-    lock: asyncio.Lock,
-) -> dict[str, int | None]:
-    quoted = quote(branch or "HEAD", safe="")
-    document = await _category(
-        database,
-        client,
-        repo,
-        f"git-tree:{branch or 'HEAD'}",
-        f"/repos/{repo}/git/trees/{quoted}",
-        loaded.config.sync.cache.standards_ttl,
-        force,
-        loaded.config.sync.cache.enabled,
-        report,
-        lock,
-        params={"recursive": "1"},
-    )
-    if document is not None and document.error:
-        if "404" in document.error or "409" in document.error:
-            return dict.fromkeys(wanted, 404)
-        return dict.fromkeys(wanted)
-    body = None if document is None else document.json_body()
-    found = tree_statuses(body, wanted)
-    if found is not None:
-        return found
-    return await _content_statuses(
-        loaded,
-        database,
-        client,
-        repo,
-        wanted,
-        force,
-        report,
-        lock,
-    )
-
-
-async def _content_statuses(
-    loaded: LoadedConfig,
-    database: Database,
-    client: GitHubClient,
-    repo: str,
-    wanted: tuple[str, ...],
-    force: bool,
-    report: SyncReport,
-    lock: asyncio.Lock,
-) -> dict[str, int | None]:
-    statuses: dict[str, int | None] = {}
-    for _name, paths in STANDARD_PATHS.items():
-        if not any(path in wanted for path in paths):
-            continue
-        for path in paths:
-            if path not in wanted:
-                continue
-            document = await _category(
-                database,
-                client,
-                repo,
-                f"contents:{path}",
-                f"/repos/{repo}/contents/{quote(path, safe='')}",
-                loaded.config.sync.cache.standards_ttl,
-                force,
-                loaded.config.sync.cache.enabled,
-                report,
-                lock,
-            )
-            status = _content_status(document)
-            statuses[path] = status
-            if status == 200:
-                break
-    return statuses
-
-
 async def _summary(
     loaded: LoadedConfig,
     database: Database,
@@ -536,19 +363,20 @@ async def _summary(
             failed=pulls.error is not None,
         )
     )
-    codeql = (
-        None
-        if alerts is None
-        else collection_count(
+    if alerts is None:
+        codeql, codeql_reason = None, ""
+    else:
+        codeql, codeql_reason = codeql_reading(
+            status=alerts.status,
+            error=alerts.error,
             body=alerts.body,
             link=alerts.link,
-            failed=alerts.error is not None,
         )
-    )
-    dependency_count = collection_count(
+    dependency_count, dependency_reason = dependabot_reading(
+        status=dependencies.status,
+        error=dependencies.error,
         body=dependencies.body,
         link=dependencies.link,
-        failed=dependencies.error is not None,
     )
     release_body = await _release_body(
         database,
@@ -575,16 +403,16 @@ async def _summary(
             "version": version,
             "open_pulls": open_pulls,
             "open_issues": (
-                issue_count(meta.get("open_issues_count"), open_pulls)
-                if count_issues
-                else None
+                issue_count(meta.get("open_issues_count")) if count_issues else None
             ),
-            "codeql": _stored_quality(fetch_quality, codeql),
+            "codeql": codeql if fetch_quality else None,
+            "codeql_reason": codeql_reason if fetch_quality else "",
             "release_date": latest_published(release_body),
             "ahead": ahead,
             "workflow": workflow,
             "workflows": workflows,
-            "dependencies": 0 if dependency_count is None else dependency_count,
+            "dependencies": dependency_count,
+            "dependencies_reason": dependency_reason,
         },
     )
 
@@ -659,10 +487,9 @@ async def _ahead(
 async def _workflow_inventory(
     client: GitHubClient,
     repo: str,
-    branch: str,
     report: SyncReport,
     lock: asyncio.Lock,
-) -> tuple[list[dict[str, str]] | None, dict[str, Any] | None]:
+) -> list[dict[str, str]] | None:
     fetched = await _counted(
         client,
         report,
@@ -671,55 +498,11 @@ async def _workflow_inventory(
         {"per_page": "100"},
     )
     if fetched.error is not None:
-        return None, None
-    names = workflow_definitions(_page_items(fetched.body, "workflows"))
-    branch_params: dict[str, str] = {}
-    if branch and branch != "HEAD":
-        branch_params["branch"] = branch
-    listed = await _counted(
-        client,
-        report,
-        lock,
-        f"/repos/{repo}/actions/runs",
-        {"per_page": "100", **branch_params},
-    )
-    known: dict[int, dict[str, object]] = {}
-    if listed.error is None:
-        known = newest_run(_page_items(listed.body, "workflow_runs"))
-    states: list[dict[str, str]] = []
-    runs: list[dict[str, Any]] = []
-    for workflow_id, name in names:
-        seen = known.get(workflow_id)
-        if seen is not None:
-            states.append({"name": name, "status": run_state(seen)})
-            runs.append(seen)
-            continue
-        one = await _counted(
-            client,
-            report,
-            lock,
-            f"/repos/{repo}/actions/workflows/{workflow_id}/runs",
-            {"per_page": "1", **branch_params},
-        )
-        if one.error is not None:
-            states.append({"name": name, "status": "Unknown"})
-            continue
-        found = _page_items(one.body, "workflow_runs")
-        run = found[0] if found and isinstance(found[0], dict) else None
-        states.append({"name": name, "status": run_state(run)})
-        if run is not None:
-            runs.append(run)
-    states.sort(key=lambda item: item["name"].casefold())
-    newest = max(runs, key=_run_stamp) if runs else None
-    return states, newest
-
-
-def _run_stamp(run: dict[str, Any]) -> str:
-    for key in ("run_started_at", "created_at", "updated_at"):
-        value = run.get(key)
-        if isinstance(value, str):
-            return value
-    return ""
+        return None
+    return [
+        {"name": name, "status": state}
+        for name, state in workflow_definitions(_page_items(fetched.body, "workflows"))
+    ]
 
 
 def _page_items(body: object, key: str) -> list[object]:
@@ -731,23 +514,19 @@ def _page_items(body: object, key: str) -> list[object]:
     return batch
 
 
-def _stored_quality(enabled: bool, count: int | None) -> int | None:
-    if not enabled:
-        return None
-    return 0 if count is None else count
-
-
 def _empty_summary() -> dict[str, object]:
     return {
         "version": "",
         "open_pulls": None,
         "open_issues": None,
-        "codeql": 0,
+        "codeql": None,
+        "codeql_reason": "",
         "release_date": "",
         "ahead": None,
-        "workflow": "Never run",
+        "workflow": "No workflows",
         "workflows": [],
-        "dependencies": 0,
+        "dependencies": None,
+        "dependencies_reason": "",
     }
 
 
@@ -890,11 +669,3 @@ def _compare_status(document: Document | None) -> str | None:
 def _ahead_by(document: Document | None) -> int | None:
     value = _mapping(document).get("ahead_by")
     return value if isinstance(value, int) else None
-
-
-def _content_status(document: Document | None) -> int | None:
-    if document is None or document.error is None:
-        return 200 if document is not None else None
-    if "404" in document.error:
-        return 404
-    return None

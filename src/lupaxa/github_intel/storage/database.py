@@ -294,7 +294,7 @@ class Database:
 
     async def clear(self, repo: str | None = None) -> None:
         """
-        Delete cached documents and checks.
+        Delete cached documents and checks. A full clear also deletes sync history.
 
         Args:
             repo: Limit the delete to one repository. None clears everything.
@@ -306,6 +306,7 @@ class Database:
             if repo is None:
                 await self._connection().execute("DELETE FROM documents")
                 await self._connection().execute("DELETE FROM check_results")
+                await self._connection().execute("DELETE FROM sync_runs")
             else:
                 await self._connection().execute(
                     "DELETE FROM documents WHERE repo = ?",

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
+import csv
+import io
+import json
 from pathlib import Path
 import sys
 from typing import Any, TypeVar
@@ -15,7 +18,10 @@ from typing import Any, TypeVar
 import typer
 
 from lupaxa.github_intel.app import Service
+from lupaxa.github_intel.config.defaults import generate_default_files
+from lupaxa.github_intel.config.paths import config_directory
 from lupaxa.github_intel.constants import (
+    EXIT_CONFIG,
     EXIT_SYNC,
     PROGRAM_NAME,
     PROGRAM_VERSION_STRING,
@@ -23,9 +29,11 @@ from lupaxa.github_intel.constants import (
 from lupaxa.github_intel.errors import (
     AuthError,
     ChecksFailed,
+    ConfigError,
     IntelError,
     SyncIncomplete,
 )
+from lupaxa.github_intel.layout import Layout, resolve_layout
 from lupaxa.github_intel.present import (
     print_detail,
     print_profile,
@@ -38,6 +46,7 @@ from lupaxa.github_intel.present import (
 from lupaxa.github_intel.reports.render import render_report
 from lupaxa.github_intel.sync.engine import SyncReport
 from lupaxa.github_intel.tui.application import run_tui
+from lupaxa.github_intel.views import RepositoryView, detail_rows
 
 __all__ = ["app", "main"]
 
@@ -49,7 +58,7 @@ app = typer.Typer(
 )
 repo_app = typer.Typer(help="Manage the configured repository list.")
 profile_app = typer.Typer(help="Inspect monitoring profiles.")
-config_app = typer.Typer(help="Show and validate configuration.")
+config_app = typer.Typer(help="Show, validate, and create configuration.")
 cache_app = typer.Typer(help="Inspect and clear the local cache.")
 app.add_typer(repo_app, name="repo")
 app.add_typer(profile_app, name="profile")
@@ -114,6 +123,7 @@ def repo_list(
     sort: str = typer.Option("name", "--sort"),
     output_format: str = typer.Option("table", "--format"),
     offline: bool = typer.Option(False, "--offline", help="Read the cache only."),
+    view: str | None = typer.Option(None, "--view"),
 ) -> None:
     """List configured repositories."""
 
@@ -122,7 +132,8 @@ def repo_list(
         ctx.obj.service.views(group=group, profile=profile, tag=tag, status=status),
     )
     views = _sort(views, sort)
-    _emit_views(views, output_format, _date_format(ctx))
+    layout, date_format = _layout(ctx, views, view)
+    _emit_views(views, output_format, date_format, layout)
 
 
 @app.command("list")
@@ -135,10 +146,21 @@ def list_alias(
     sort: str = typer.Option("name", "--sort"),
     output_format: str = typer.Option("table", "--format"),
     offline: bool = typer.Option(False, "--offline"),
+    view: str | None = typer.Option(None, "--view"),
 ) -> None:
     """List configured repositories."""
 
-    repo_list(ctx, group, profile, tag, status, sort, output_format, offline)
+    repo_list(
+        ctx,
+        group,
+        profile,
+        tag,
+        status,
+        sort,
+        output_format,
+        offline,
+        view,
+    )
 
 
 @repo_app.command("add")
@@ -215,15 +237,20 @@ def repo_show(
     name: str | None = typer.Argument(None, metavar="REPO"),
     offline: bool = typer.Option(False, "--offline"),
     output_format: str = typer.Option("table", "--format"),
+    view: str | None = typer.Option(None, "--view"),
 ) -> None:
     """Show one repository. Pass the organisation and the repository name."""
 
     del offline
-    view, _resolved, _documents = _run(ctx.obj.service.show(_identifier(org, name)))
-    if output_format == "json":
-        typer.echo(render_report([view], "json"), nl=False)
+    shown, _resolved, _documents = _run(ctx.obj.service.show(_identifier(org, name)))
+    layout, pattern = _layout(ctx, [shown], view)
+    if output_format in {"json", "csv"}:
+        typer.echo(
+            _render_show(shown, output_format, pattern, layout.detail_fields),
+            nl=False,
+        )
         return
-    print_detail(view, date_format=_date_format(ctx))
+    print_detail(shown, date_format=pattern, fields=layout.detail_fields)
 
 
 @profile_app.command("list")
@@ -243,7 +270,7 @@ def profile_show(
 ) -> None:
     """Show a profile. --resolved includes the source of each flag."""
 
-    from lupaxa.github_intel.config.profiles import resolve_profile
+    from lupaxa.github_intel.config.profiles import check_defaults, resolve_profile
 
     loaded = _call(ctx.obj.service.load)
     print_profile(
@@ -251,10 +278,7 @@ def profile_show(
             loaded.profiles,
             name,
             {},
-            loaded.config.defaults.standards,
-            issues=loaded.config.defaults.issues,
-            pull_requests=loaded.config.defaults.pull_requests,
-            quality=loaded.config.defaults.quality,
+            **check_defaults(loaded.config.defaults),
         ),
         show_sources=resolved,
     )
@@ -264,7 +288,7 @@ def profile_show(
 def profile_tree(ctx: typer.Context) -> None:
     """Print each profile's inheritance chain."""
 
-    from lupaxa.github_intel.config.profiles import resolve_profile
+    from lupaxa.github_intel.config.profiles import check_defaults, resolve_profile
 
     loaded = _call(ctx.obj.service.load)
     for name in loaded.profiles:
@@ -273,10 +297,7 @@ def profile_tree(ctx: typer.Context) -> None:
                 loaded.profiles,
                 name,
                 {},
-                loaded.config.defaults.standards,
-                issues=loaded.config.defaults.issues,
-                pull_requests=loaded.config.defaults.pull_requests,
-                quality=loaded.config.defaults.quality,
+                **check_defaults(loaded.config.defaults),
             ).chain
         )
         stdout_console().print(f"{name}: {chain}")
@@ -286,7 +307,7 @@ def profile_tree(ctx: typer.Context) -> None:
 def profile_validate(ctx: typer.Context) -> None:
     """Validate every profile, including inheritance."""
 
-    from lupaxa.github_intel.config.profiles import resolve_profile
+    from lupaxa.github_intel.config.profiles import check_defaults, resolve_profile
 
     loaded = _call(ctx.obj.service.load)
     for name in loaded.profiles:
@@ -294,12 +315,40 @@ def profile_validate(ctx: typer.Context) -> None:
             loaded.profiles,
             name,
             {},
-            loaded.config.defaults.standards,
-            issues=loaded.config.defaults.issues,
-            pull_requests=loaded.config.defaults.pull_requests,
-            quality=loaded.config.defaults.quality,
+            **check_defaults(loaded.config.defaults),
         )
     stdout_console().print(f"Validated {len(loaded.profiles)} profiles.")
+
+
+@config_app.command("init")
+def config_init(
+    ctx: typer.Context,
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite existing files with the defaults.",
+    ),
+) -> None:
+    """Write config.yml, profiles.yml, and repositories.yml filled with defaults."""
+
+    paths = _default_paths(ctx.obj.service.config_path)
+    written, kept = generate_default_files(paths, force=force)
+    for path in written:
+        stdout_console().print(f"Wrote {path}.")
+    for path in kept:
+        stdout_console().print(f"Kept {path}. Use --force to overwrite.")
+    if not written:
+        raise typer.Exit(code=EXIT_CONFIG)
+
+
+def _default_paths(config: Path | None) -> tuple[Path, Path, Path]:
+    if config is None:
+        directory = config_directory()
+        main = directory / "config.yml"
+    else:
+        main = config
+        directory = config.parent
+    return main, directory / "profiles.yml", directory / "repositories.yml"
 
 
 @config_app.command("show")
@@ -379,12 +428,20 @@ def report_command(
     profile: str | None = typer.Option(None, "--profile"),
     output: Path | None = typer.Option(None, "--output"),
     offline: bool = typer.Option(False, "--offline"),
+    view: str | None = typer.Option(None, "--view"),
 ) -> None:
     """Export repository information."""
 
     del offline
     views = _run(ctx.obj.service.views(group=group, profile=profile))
-    text = render_report(views, output_format, date_format=_date_format(ctx))
+    layout, pattern = _layout(ctx, views, view)
+    text = render_report(
+        views,
+        output_format,
+        date_format=pattern,
+        fields=layout.list_fields,
+        detail=False,
+    )
     if output is None:
         sys.stdout.write(text)
         return
@@ -396,15 +453,26 @@ def audit_command(
     ctx: typer.Context,
     output_format: str = typer.Option("table", "--format"),
     fail_on_checks: bool = typer.Option(False, "--fail-on-checks"),
+    view: str | None = typer.Option(None, "--view"),
 ) -> None:
     """Show cached check results."""
 
     views = _run(ctx.obj.service.views())
-    failing = [view for view in views if any(item.failure for item in view.checks)]
+    failing = [item for item in views if any(check.failure for check in item.checks)]
+    layout, pattern = _layout(ctx, failing, view)
     if output_format == "json":
-        typer.echo(render_report(failing, "json"), nl=False)
+        typer.echo(
+            render_report(
+                failing,
+                "json",
+                date_format=pattern,
+                fields=layout.list_fields,
+                detail=False,
+            ),
+            nl=False,
+        )
     else:
-        print_repos(failing, date_format=_date_format(ctx))
+        print_repos(failing, date_format=pattern, fields=layout.list_fields)
     if fail_on_checks and failing:
         raise ChecksFailed(f"{len(failing)} repositories have failing checks.")
 
@@ -421,13 +489,6 @@ def workflows_command(ctx: typer.Context) -> None:
     """Show cached workflow check results."""
 
     _print_named_checks(ctx, "workflows")
-
-
-@app.command("issues")
-def issues_command(ctx: typer.Context) -> None:
-    """Show cached issue check results."""
-
-    _print_named_checks(ctx, "issues")
 
 
 @cache_app.command("info")
@@ -459,11 +520,36 @@ def cache_vacuum(ctx: typer.Context) -> None:
     _run(ctx.obj.service.vacuum())
 
 
+@app.command("reset")
+def reset_command(
+    ctx: typer.Context,
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """Delete the cache. Configuration and the repository list stay."""
+
+    _confirm("Delete the cache? Configuration is kept.", yes)
+    removed = _call(ctx.obj.service.reset)
+    if removed:
+        stdout_console().print(f"Deleted {len(removed)} cache file(s).")
+        return
+    stdout_console().print("The cache is already empty.")
+
+
 @app.command("tui")
-def tui_command(ctx: typer.Context) -> None:
+def tui_command(
+    ctx: typer.Context,
+    view: str | None = typer.Option(None, "--view"),
+) -> None:
     """Open the interactive interface."""
 
-    run_tui(ctx.obj.service)
+    if view is not None:
+        try:
+            loaded = ctx.obj.service.load()
+        except ConfigError:
+            loaded = None  # The interface explains a configuration problem.
+        if loaded is not None:
+            _call(resolve_layout, loaded.config.display, view, [])
+    run_tui(ctx.obj.service, view)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -497,19 +583,69 @@ def _run(coro: Coroutine[Any, Any, ResultT]) -> ResultT:
         raise typer.Exit(code=exc.exit_code) from exc
 
 
-def _date_format(ctx: typer.Context) -> str:
+def _layout(
+    ctx: typer.Context,
+    views: list[Any],
+    view: str | None,
+) -> tuple[Layout, str]:
     loaded = _call(ctx.obj.service.load)
-    pattern: str = loaded.config.display.date_format
-    return pattern
+    name = view or loaded.config.display.view
+    layout = _call(resolve_layout, loaded.config.display, name, views)
+    return layout, loaded.config.display.date_format
 
 
-def _emit_views(views: list[Any], output_format: str, date_format: str) -> None:
+def _emit_views(
+    views: list[Any],
+    output_format: str,
+    date_format: str,
+    layout: Layout,
+) -> None:
     if output_format in {"json", "csv", "markdown"}:
         sys.stdout.write(
-            render_report(views, output_format, date_format=date_format),
+            render_report(
+                views,
+                output_format,
+                date_format=date_format,
+                fields=layout.list_fields,
+                detail=False,
+            ),
         )
         return
-    print_repos(views, date_format=date_format)
+    print_repos(views, date_format=date_format, fields=layout.list_fields)
+
+
+def _render_show(
+    shown: RepositoryView,
+    output_format: str,
+    date_format: str,
+    fields: tuple[str, ...] | None,
+) -> str:
+    if fields is None:
+        return _format_detail_pairs(
+            detail_rows(shown, date_format=date_format),
+            output_format,
+        )
+    return render_report(
+        [shown],
+        output_format,
+        date_format=date_format,
+        fields=fields,
+        detail=True,
+    )
+
+
+def _format_detail_pairs(
+    pairs: tuple[tuple[str, str], ...],
+    output_format: str,
+) -> str:
+    record = dict(pairs)
+    if output_format == "json":
+        return json.dumps(record, indent=2) + "\n"
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(record))
+    writer.writeheader()
+    writer.writerow(record)
+    return buffer.getvalue()
 
 
 def _sort(views: list[Any], key: str) -> list[Any]:

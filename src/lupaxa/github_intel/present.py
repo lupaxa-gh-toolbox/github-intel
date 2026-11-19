@@ -18,15 +18,16 @@ from rich.table import Table
 from rich.text import Text
 
 from lupaxa.github_intel.config.profiles import ResolvedProfile
-from lupaxa.github_intel.dates import DEFAULT_DATE_FORMAT, format_date, format_timestamp
+from lupaxa.github_intel.dates import DEFAULT_DATE_FORMAT, format_timestamp
+from lupaxa.github_intel.layout import RIGHT_ALIGNED, hardcoded_list
 from lupaxa.github_intel.sync.engine import SyncReport
 from lupaxa.github_intel.views import (
     RepositoryView,
     detail_rows,
-    metric_cells,
-    metric_columns,
-    split_identifier,
+    field_text,
     status_style,
+    visibility_style,
+    workflow_text,
 )
 
 __all__ = [
@@ -68,46 +69,27 @@ def print_repos(
     views: list[RepositoryView],
     *,
     date_format: str = DEFAULT_DATE_FORMAT,
+    fields: tuple[str, ...] | None = None,
 ) -> None:
     """
     Print a repository table.
 
     Args:
         views: Rows to show.
-        date_format: Pattern such as ``DD/MM/YYYY``.
+        date_format: Pattern such as ``DD/MM/YYYY HH:mm UTC``.
+        fields: Catalogue labels. ``None`` uses the hardcoded list.
 
     """
 
-    table = Table(title="Repositories")
-    for column in (
-        "Org",
-        "Repo",
-        "Visibility",
-        "Group",
-        "Profile",
-        "Status",
-        "Version",
-        "Last push",
-        "Release date",
-    ):
-        table.add_column(column)
-    columns = metric_columns(list(views))
+    columns = hardcoded_list(views) if fields is None else fields
+    table = Table(title="Repositories", header_style="bold cyan")
     for column in columns:
-        table.add_column(column, justify="right")
-    for view in views:
-        org, name = split_identifier(view.repo)
-        table.add_row(
-            org,
-            name,
-            view.visibility,
-            view.group,
-            view.profile,
-            _painted(view.status),
-            view.version,
-            format_date(view.last_push, date_format),
-            format_date(view.release_date, date_format),
-            *metric_cells(view, columns),
+        table.add_column(
+            column,
+            justify="right" if column in RIGHT_ALIGNED else "left",
         )
+    for view in views:
+        table.add_row(*list_row(view, columns, date_format))
     stdout_console().print(table)
 
 
@@ -115,21 +97,23 @@ def print_detail(
     view: RepositoryView,
     *,
     date_format: str = DEFAULT_DATE_FORMAT,
+    fields: tuple[str, ...] | None = None,
 ) -> None:
     """
     Print one repository as a field and value table.
 
     Args:
         view: Repository to show.
-        date_format: Pattern such as ``DD/MM/YYYY``.
+        date_format: Pattern such as ``DD/MM/YYYY HH:mm UTC``.
+        fields: Catalogue labels. ``None`` keeps every current row.
 
     """
 
-    table = Table(title=view.repo)
-    table.add_column("Field")
+    table = Table(title=repo_title(view))
+    table.add_column("Field", style="cyan")
     table.add_column("Value")
-    for field, value in detail_rows(view, date_format=date_format):
-        table.add_row(field, _painted(value))
+    for field, value in detail_rows(view, date_format=date_format, fields=fields):
+        table.add_row(field, _present_cell(field, value, view))
     stdout_console().print(table)
 
 
@@ -158,12 +142,6 @@ def print_profile(resolved: ResolvedProfile, *, show_sources: bool) -> None:
         else:
             table.add_row(name, enabled)
     console.print(table)
-    rules = Table(title="Standards")
-    rules.add_column("Rule")
-    rules.add_column("Required")
-    for name, required in resolved.standards.model_dump().items():
-        rules.add_row(name, "Yes" if required else "No")
-    console.print(rules)
 
 
 def print_sync(report: SyncReport) -> None:
@@ -277,11 +255,90 @@ def _wait_label(seconds: float) -> str:
     return f"{secs}s"
 
 
-def _painted(value: str) -> str | Text:
-    style = status_style(value)
-    if not style:
+def list_row(
+    view: RepositoryView,
+    fields: tuple[str, ...],
+    date_format: str,
+) -> tuple[str | Text, ...]:
+    """
+    Paint one repository list row.
+
+    Args:
+        view: Repository to show.
+        fields: Catalogue labels, in column order.
+        date_format: Pattern such as ``DD/MM/YYYY HH:mm UTC``.
+
+    Returns:
+        One cell per field.
+
+    """
+
+    cells: list[str | Text] = []
+    for label in fields:
+        text = field_text(view, label, date_format, detail=False)
+        cells.append(_present_cell(label, text, view))
+    return tuple(cells)
+
+
+def repo_title(view: RepositoryView) -> str | Text:
+    """Colour the repository id red when its record failed."""
+    if view.metadata_error:
+        return Text(view.repo, style="red")
+    return view.repo
+
+
+def _present_cell(label: str, value: str, view: RepositoryView) -> str | Text:
+    if label == "Workflows" and view.workflows:
+        listed = workflow_text(view.workflows)
+        if listed.plain == value:
+            return listed
+    style = _cell_style(label, value, view)
+    if not style or not value:
         return value
     return Text(value, style=style)
+
+
+def _cell_style(label: str, value: str, view: RepositoryView) -> str:
+    if label == "Repository" and view.metadata_error:
+        return "red"
+    if label == "Metadata error":
+        return "red"
+    if label == "Visibility":
+        return visibility_style(value)
+    if label == "Status":
+        return status_style(view.status)
+    if label == "Enabled":
+        return {"yes": "green", "no": "dim"}.get(value.strip().casefold(), "")
+    if label == "Archived" and value.strip().casefold() == "yes":
+        return "yellow"
+    if label == "Fork" and value.strip().casefold() == "yes":
+        return "cyan"
+    if label == "Ahead":
+        return _count_style(value, zero="green", positive="yellow")
+    if label in {"Quality", "Dependabot Alerts"}:
+        counted = _count_style(value, zero="green", positive="yellow")
+        return counted or status_style(value)
+    if label == "Cache":
+        return _cache_style(value)
+    return status_style(value)
+
+
+def _count_style(value: str, *, zero: str, positive: str) -> str:
+    text = value.strip()
+    if not text.isdigit():
+        return ""
+    return zero if int(text) == 0 else positive
+
+
+def _cache_style(value: str) -> str:
+    tokens = {part.strip().casefold() for part in value.split(",") if part.strip()}
+    if tokens & {"error", "unavailable"}:
+        return "red"
+    if "stale" in tokens:
+        return "yellow"
+    if "cached" in tokens:
+        return "green"
+    return ""
 
 
 def format_time(
@@ -294,7 +351,7 @@ def format_time(
 
     Args:
         value: Epoch seconds, or None.
-        date_format: Pattern such as ``DD/MM/YYYY``.
+        date_format: Pattern such as ``DD/MM/YYYY HH:mm UTC``.
 
     Returns:
         UTC timestamp, or an empty string.

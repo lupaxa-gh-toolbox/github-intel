@@ -53,7 +53,6 @@ github-intel report [--format markdown|json|csv] [--group NAME]
 github-intel audit [--format table|json] [--fail-on-checks]
 github-intel releases
 github-intel workflows
-github-intel issues
 ```
 
 ## Profiles, Configuration, and Cache
@@ -63,11 +62,13 @@ github-intel profile list
 github-intel profile show NAME [--resolved]
 github-intel profile tree
 github-intel profile validate
+github-intel config init [--force]
 github-intel config show
 github-intel config validate
 github-intel config paths
 github-intel cache info
 github-intel cache clear [--repo OWNER/NAME] [--yes]
 github-intel cache vacuum
+github-intel reset [--yes]
 github-intel tui
 ```

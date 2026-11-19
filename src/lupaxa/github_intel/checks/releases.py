@@ -50,7 +50,7 @@ def evaluate_releases(
         return CheckResult(
             "releases",
             f"{ahead_by} Ahead",
-            f"{ahead_by} commits on the default branch after {tag}.",
+            f"{ahead_by} commits ahead on the default branch after {tag}.",
         )
     return CheckResult(
         "releases",

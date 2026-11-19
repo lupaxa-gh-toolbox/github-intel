@@ -43,8 +43,6 @@ CHECK_NAMES: Final[tuple[str, ...]] = (
     "issues",
     "pull_requests",
     "quality",
-    "standards",
-    "security",
 )
 
 EXIT_SUCCESS: Final[int] = 0

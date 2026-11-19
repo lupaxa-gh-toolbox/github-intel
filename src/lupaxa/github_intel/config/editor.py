@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
+from pydantic import ValidationError
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
@@ -23,6 +24,7 @@ from lupaxa.github_intel.config.loader import (
     repository_key,
     validate_repository_file,
 )
+from lupaxa.github_intel.config.models import RepositorySpec
 from lupaxa.github_intel.errors import ConfigError, NotFound
 
 __all__ = [
@@ -56,16 +58,17 @@ def add_repository(
 
     """
 
-    def mutate(items: CommentedSeq | list[Any]) -> None:
-        _reject_duplicate(items, repo)
-        entry: dict[str, Any] = {"repo": repo}
-        if group is not None:
-            entry["group"] = group
-        if profile is not None:
-            entry["profile"] = profile
-        if tags:
-            entry["tags"] = list(tags)
-        items.append(entry)
+    def mutate(owners: CommentedSeq | list[Any]) -> None:
+        owner, name = _split(repo)
+        _reject_duplicate(owners, f"{owner}/{name}")
+        block = _find_owner(owners, owner)
+        if block is None:
+            block = _new_owner(owner, group, profile)
+            owners.append(block)
+            listed = block["repositories"]
+        else:
+            listed = _repository_list(block)
+        listed.append(_entry(name, block, group, profile, tags))
 
     _edit(config_path, mutate)
 
@@ -83,9 +86,12 @@ def remove_repository(config_path: Path, repo: str) -> None:
 
     """
 
-    def mutate(items: CommentedSeq | list[Any]) -> None:
-        index = _find(items, repo)
-        del items[index]
+    def mutate(owners: CommentedSeq | list[Any]) -> None:
+        owner, name = _split(repo)
+        block, index = _find(owners, owner, name)
+        del _repository_list(block)[index]
+        if len(_repository_list(block)) == 0:
+            owners.remove(block)
 
     _edit(config_path, mutate)
 
@@ -111,9 +117,11 @@ def set_repository_fields(
 
     """
 
-    def mutate(items: CommentedSeq | list[Any]) -> None:
-        index = _find(items, repo)
-        items[index] = _with_fields(_as_mapping(items[index]), fields)
+    def mutate(owners: CommentedSeq | list[Any]) -> None:
+        owner, name = _split(repo)
+        block, index = _find(owners, owner, name)
+        listed = _repository_list(block)
+        listed[index] = _with_fields(_as_mapping(listed[index], name), fields)
 
     _edit(config_path, mutate)
 
@@ -134,15 +142,17 @@ def _load_editable(path: Path) -> tuple[Any, CommentedSeq | list[Any]]:
     suffix = path.suffix.casefold()
     if suffix == ".json":
         document = json.loads(path.read_text(encoding="utf-8"))
-        items = document.get("repositories")
+        items = document.get("organisations")
         if not isinstance(items, list):
-            raise ConfigError(f"{path} repositories must be a list.")
+            raise ConfigError(f"{path} organisations must be a list.")
         return document, items
     yaml = _round_trip()
     document = yaml.load(path.read_text(encoding="utf-8"))
-    items = document.get("repositories") if isinstance(document, CommentedMap) else None
+    items = None
+    if isinstance(document, CommentedMap):
+        items = document.get("organisations")
     if not isinstance(items, CommentedSeq):
-        raise ConfigError(f"{path} repositories must be a list.")
+        raise ConfigError(f"{path} organisations must be a list.")
     return document, items
 
 
@@ -186,37 +196,112 @@ def _round_trip() -> YAML:
     return yaml
 
 
-def _reject_duplicate(items: CommentedSeq | list[Any], repo: str) -> None:
-    key = repository_key(repo)
-    for item in items:
-        if repository_key(_identity(item)) == key:
-            raise ConfigError(f"{repo} is already configured.")
+def _split(repo: str) -> tuple[str, str]:
+    try:
+        canonical = RepositorySpec(repo=repo).repo
+    except ValidationError as exc:
+        raise ConfigError("repo must be owner/name.") from exc
+    owner, _, name = canonical.partition("/")
+    return owner, name
 
 
-def _find(items: CommentedSeq | list[Any], repo: str) -> int:
-    key = repository_key(repo)
-    for index, item in enumerate(items):
-        if repository_key(_identity(item)) == key:
-            return index
-    raise NotFound(f"{repo} is not configured.")
+def _reject_duplicate(owners: CommentedSeq | list[Any], repo: str) -> None:
+    owner, name = _split(repo)
+    try:
+        _find(owners, owner, name)
+    except NotFound:
+        return
+    raise ConfigError(f"{repo} is already configured.")
 
 
-def _identity(item: object) -> str:
+def _find(
+    owners: CommentedSeq | list[Any],
+    owner: str,
+    name: str,
+) -> tuple[CommentedMap | dict[str, Any], int]:
+    wanted = repository_key(f"{owner}/{name}")
+    for block in owners:
+        if not isinstance(block, dict):
+            continue
+        raw_owner = block.get("name")
+        if not isinstance(raw_owner, str):
+            continue
+        listed = block.get("repositories")
+        if not isinstance(listed, list):
+            continue
+        for index, item in enumerate(listed):
+            if repository_key(f"{raw_owner}/{_item_name(item)}") == wanted:
+                return block, index
+    raise NotFound(f"{owner}/{name} is not configured.")
+
+
+def _find_owner(
+    owners: CommentedSeq | list[Any],
+    owner: str,
+) -> CommentedMap | dict[str, Any] | None:
+    for block in owners:
+        if not isinstance(block, dict):
+            continue
+        raw_name = block.get("name")
+        if isinstance(raw_name, str) and raw_name.casefold() == owner.casefold():
+            return cast("dict[str, Any]", block)
+    return None
+
+
+def _new_owner(owner: str, group: str | None, profile: str | None) -> CommentedMap:
+    block = CommentedMap()
+    block["name"] = owner
+    if group is not None:
+        block["group"] = group
+    if profile is not None:
+        block["profile"] = profile
+    block["repositories"] = CommentedSeq()
+    return block
+
+
+def _repository_list(block: CommentedMap | dict[str, Any]) -> CommentedSeq | list[Any]:
+    listed = block.get("repositories")
+    if not isinstance(listed, list):
+        raise ConfigError(f"{block.get('name')} repositories must be a list.")
+    return listed
+
+
+def _entry(
+    name: str,
+    block: CommentedMap | dict[str, Any],
+    group: str | None,
+    profile: str | None,
+    tags: list[str] | None,
+) -> str | CommentedMap:
+    mapping = CommentedMap()
+    mapping["name"] = name
+    if group is not None and group != block.get("group"):
+        mapping["group"] = group
+    if profile is not None and profile != block.get("profile"):
+        mapping["profile"] = profile
+    if tags:
+        mapping["tags"] = list(tags)
+    if len(mapping) == 1:
+        return name
+    return mapping
+
+
+def _item_name(item: object) -> str:
     if isinstance(item, str):
         return item
-    if isinstance(item, dict) and isinstance(item.get("repo"), str):
-        return cast("str", item["repo"])
-    raise ConfigError("A repository entry must be owner/name or an object.")
+    if isinstance(item, dict) and isinstance(item.get("name"), str):
+        return cast("str", item["name"])
+    raise ConfigError("A repository entry must be a name or an object.")
 
 
-def _as_mapping(item: object) -> CommentedMap | dict[str, Any]:
+def _as_mapping(item: object, name: str) -> CommentedMap | dict[str, Any]:
     if isinstance(item, str):
         mapping = CommentedMap()
-        mapping["repo"] = item
+        mapping["name"] = name
         return mapping
     if isinstance(item, dict):
         return item
-    raise ConfigError("A repository entry must be owner/name or an object.")
+    raise ConfigError("A repository entry must be a name or an object.")
 
 
 def _with_fields(

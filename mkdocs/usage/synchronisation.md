@@ -17,14 +17,12 @@ Each enabled repository gets the repository record, then only the data its profi
 | Repository record | One request                                                                                    |
 | Releases          | One page, the 20 newest. The check uses the newest published release                           |
 | Compare           | One request, the release tag against the default branch                                        |
-| Workflows         | One list, one page of recent runs, then one request only for a workflow missing from that page |
-| Issues            | One page of open issues when the issues check is on                                            |
-| Standards         | One git tree request for every required file                                                   |
+| Workflows         | One list of workflow files. Run history is not requested                                       |
 | Pull requests     | One request. The count comes from the page link                                                |
-| CodeQL            | One request for open alerts. A refusal is stored as 0                                          |
-| Dependabot        | One request for open alerts. A refusal is stored as 0                                          |
+| CodeQL            | One request. No scanning, Forbidden, or Unknown when there is no count                         |
+| Dependabot        | One request for open alerts. A refusal is shown as Unknown                                     |
 
-Workflow history is not paged. Release history is not paged. The workflow requests run only when the profile has workflows enabled.
+Release history is not paged. The workflow list is requested only when the profile has workflows enabled.
 
 The summary, including stars, dates, and the workflow list, uses the issues freshness window. A sync inside that window leaves the summary as it is unless you pass `--force`.
 

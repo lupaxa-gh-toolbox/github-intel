@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import re
 
+from lupaxa.github_intel.dates import normalize_instant
+
 __all__ = [
     "ahead_count",
+    "codeql_reading",
     "collection_count",
+    "dependabot_reading",
     "format_count",
     "issue_count",
     "latest_published",
     "latest_tag",
-    "run_state",
+    "workflow_activity",
     "workflow_definitions",
     "workflow_label",
 ]
@@ -21,13 +25,13 @@ _LAST_PAGE = re.compile(r"""[?&]page=(\d+)[^>]*>;\s*rel="last\"""")
 
 def latest_published(body: object) -> str:
     """
-    Return the calendar date of the newest published release.
+    Return the publish time of the newest published release.
 
     Args:
         body: Release list from GitHub, newest first.
 
     Returns:
-        ``YYYY-MM-DD``, or an empty string when no published release exists.
+        An ISO instant, or an empty string when no published release exists.
 
     """
 
@@ -36,7 +40,7 @@ def latest_published(body: object) -> str:
     for item in body:
         if not isinstance(item, dict) or item.get("draft"):
             continue
-        return _calendar_date(item.get("published_at"))
+        return normalize_instant(item.get("published_at"))
     return ""
 
 
@@ -87,24 +91,104 @@ def collection_count(*, body: object, link: str | None, failed: bool) -> int | N
     return len(body)
 
 
-def issue_count(open_issues_count: object, pulls: int | None) -> int | None:
+def codeql_reading(
+    *,
+    status: int,
+    error: str | None,
+    body: object,
+    link: str | None,
+) -> tuple[int | None, str]:
     """
-    Return open issues, excluding pull requests.
+    Return the open CodeQL count, or a short reason when it is missing.
 
     Args:
-        open_issues_count: Repository field that counts issues and pull requests.
-        pulls: Open pull requests, or None when that count is unknown.
+        status: HTTP status. Zero means the request did not complete.
+        error: Client error text, or None for a successful response.
+        body: JSON body from a successful response.
+        link: Link header from a successful response.
 
     Returns:
-        Open issues, or None when the two counts cannot be separated.
+        The count and an empty reason, or None and ``No scanning``,
+        ``Forbidden``, or ``Unknown``.
 
     """
 
-    if pulls is None or isinstance(open_issues_count, bool):
+    if error is None:
+        count = collection_count(body=body, link=link, failed=False)
+        if count is None:
+            return None, "Unknown"
+        return count, ""
+    folded = error.casefold()
+    if status == 404 or _scanning_is_off(folded):
+        return None, "No scanning"
+    if status in {401, 403}:
+        return None, "Forbidden"
+    return None, "Unknown"
+
+
+def dependabot_reading(
+    *,
+    status: int,
+    error: str | None,
+    body: object,
+    link: str | None,
+) -> tuple[int | None, str]:
+    """
+    Return the open Dependabot count, or a short reason when it is missing.
+
+    Args:
+        status: HTTP status. Zero means the request did not complete.
+        error: Client error text, or None for a successful response.
+        body: JSON body from a successful response.
+        link: Link header from a successful response.
+
+    Returns:
+        The count and an empty reason, or None and ``Disabled``,
+        ``Forbidden``, or ``Unknown``.
+
+    """
+
+    if error is None:
+        count = collection_count(body=body, link=link, failed=False)
+        if count is None:
+            return None, "Unknown"
+        return count, ""
+    folded = error.casefold()
+    if "disabled" in folded or "not enabled" in folded or "must be enabled" in folded:
+        return None, "Disabled"
+    if status in {401, 403, 404}:
+        return None, "Forbidden"
+    return None, "Unknown"
+
+
+def _scanning_is_off(message: str) -> bool:
+    return any(
+        phrase in message
+        for phrase in (
+            "no analysis",
+            "not enabled",
+            "must be enabled",
+            "advanced security",
+            "code security",
+        )
+    )
+
+
+def issue_count(open_issues_count: object) -> int | None:
+    """
+    Return GitHub's open issue total.
+
+    Args:
+        open_issues_count: Repository field. GitHub includes open pull requests.
+
+    Returns:
+        That total, or None when GitHub did not send a count.
+
+    """
+
+    if isinstance(open_issues_count, bool) or not isinstance(open_issues_count, int):
         return None
-    if not isinstance(open_issues_count, int):
-        return None
-    return max(0, open_issues_count - pulls)
+    return open_issues_count
 
 
 def ahead_count(body: object) -> int | None:
@@ -127,100 +211,84 @@ def ahead_count(body: object) -> int | None:
     return value
 
 
-def workflow_definitions(items: object) -> tuple[tuple[int, str], ...]:
+def workflow_activity(state: object) -> str:
     """
-    Return each workflow's id and name.
+    Return a display label for a workflow list entry.
+
+    Args:
+        state: GitHub workflow ``state``.
+
+    Returns:
+        ``Active``, a specific disabled reason, the state's own words, or
+        ``Unknown`` when GitHub sent no state.
+
+    """
+
+    text = str(state or "").strip().casefold()
+    if text == "active":
+        return "Active"
+    if text.startswith("disabled_"):
+        reason = text.removeprefix("disabled_").replace("_", " ").title()
+        return f"{reason} Disabled"
+    if text == "disabled":
+        return "Disabled"
+    if not text:
+        return "Unknown"
+    return text.replace("_", " ").title()
+
+
+def workflow_definitions(items: object) -> tuple[tuple[str, str], ...]:
+    """
+    Return each workflow's name and activity.
 
     Args:
         items: The ``workflows`` array from GitHub.
 
     Returns:
-        Id and display name pairs.
+        Name and activity pairs, sorted by name.
 
     """
 
     if not isinstance(items, list):
         return ()
-    found: list[tuple[int, str]] = []
+    found: list[tuple[str, str]] = []
     for item in items:
-        if not isinstance(item, dict) or isinstance(item.get("id"), bool):
-            continue
-        workflow_id = item.get("id")
-        if not isinstance(workflow_id, int):
+        if not isinstance(item, dict):
             continue
         name = item.get("name")
         if not isinstance(name, str) or name == "":
             path = item.get("path")
-            name = path if isinstance(path, str) and path else f"Workflow {workflow_id}"
-        found.append((workflow_id, name))
+            workflow_id = item.get("id")
+            if isinstance(path, str) and path:
+                name = path
+            elif isinstance(workflow_id, int) and not isinstance(workflow_id, bool):
+                name = f"Workflow {workflow_id}"
+            else:
+                continue
+        found.append((name, workflow_activity(item.get("state"))))
+    found.sort(key=lambda item: item[0].casefold())
     return tuple(found)
-
-
-def newest_run(items: object) -> dict[int, dict[str, object]]:
-    """
-    Keep the first run for each workflow.
-
-    Args:
-        items: The ``workflow_runs`` array, newest first.
-
-    Returns:
-        Workflow id to that run.
-
-    """
-
-    if not isinstance(items, list):
-        return {}
-    found: dict[int, dict[str, object]] = {}
-    for item in items:
-        if not isinstance(item, dict) or isinstance(item.get("workflow_id"), bool):
-            continue
-        workflow_id = item.get("workflow_id")
-        if isinstance(workflow_id, int) and workflow_id not in found:
-            found[workflow_id] = item
-    return found
-
-
-def run_state(run: object) -> str:
-    """
-    Return the result of one workflow run.
-
-    Args:
-        run: A workflow run object, or None when that workflow has not run.
-
-    Returns:
-        Success, Failure, In progress, or Never run.
-
-    """
-
-    from lupaxa.github_intel.checks.workflows import evaluate_workflows
-
-    if not isinstance(run, dict):
-        return "Never run"
-    return evaluate_workflows([run], None).status
 
 
 def workflow_label(body: object, *, failed: bool) -> str:
     """
-    Return the newest workflow result on the requested branch.
+    Return the workflow-list headline from a stored workflow payload.
 
     Args:
-        body: Actions runs payload.
+        body: Workflow list payload.
         failed: The request did not succeed.
 
     Returns:
-        Success, Failure, In progress, or Never run.
+        ``Listed``, ``No workflows``, or an empty string.
 
     """
 
-    from lupaxa.github_intel.checks.workflows import evaluate_workflows
-
     if failed or not isinstance(body, dict):
-        return "Never run"
-    raw = body.get("workflow_runs")
-    if not isinstance(raw, list):
-        return "Never run"
-    runs = [item for item in raw if isinstance(item, dict)]
-    return evaluate_workflows(runs, None).status
+        return ""
+    pairs = workflow_definitions(body.get("workflows"))
+    if not pairs:
+        return "No workflows"
+    return "Listed"
 
 
 def format_count(value: int | None) -> str:
@@ -238,11 +306,3 @@ def format_count(value: int | None) -> str:
     if value is None:
         return ""
     return str(value)
-
-
-def _calendar_date(value: object) -> str:
-    if not isinstance(value, str) or len(value) < 10:
-        return ""
-    if value[4] != "-" or value[7] != "-":
-        return ""
-    return value[:10]

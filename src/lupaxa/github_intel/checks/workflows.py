@@ -10,40 +10,25 @@ __all__ = ["evaluate_workflows"]
 
 
 def evaluate_workflows(
-    runs: list[dict[str, Any]] | None,
+    workflows: list[dict[str, Any]] | None,
     error: str | None,
 ) -> CheckResult:
     """
-    Summarise the newest workflow run.
+    Summarise the workflow list.
 
     Args:
-        runs: Workflow run objects, newest first.
+        workflows: Workflow name and activity pairs already prepared for display.
         error: Request failure, if any.
 
     Returns:
-        Workflow check result.
+        Workflow check result. Listing workflows is not a failure.
 
     """
 
     if error:
         return CheckResult("workflows", "Error", error, True)
-    if not runs:
-        return CheckResult("workflows", "Never run", "No workflow runs were found.")
-    latest = runs[0]
-    name = str(latest.get("name") or "workflow")
-    state = str(latest.get("status") or "")
-    if state != "completed":
-        return CheckResult(
-            "workflows",
-            "In progress",
-            f"{name} is {state or 'in progress'}.",
-        )
-    conclusion = str(latest.get("conclusion") or "completed")
-    failed = conclusion in {"failure", "timed_out", "startup_failure"}
-    label = "Failure" if failed else "Success"
-    return CheckResult(
-        "workflows",
-        label,
-        f"{name} finished with {conclusion}.",
-        failed,
-    )
+    count = 0 if workflows is None else len(workflows)
+    if count == 0:
+        return CheckResult("workflows", "No workflows", "No workflows are configured.")
+    noun = "workflow" if count == 1 else "workflows"
+    return CheckResult("workflows", "Listed", f"{count} {noun}.")

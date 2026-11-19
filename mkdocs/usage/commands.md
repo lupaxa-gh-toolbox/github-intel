@@ -58,24 +58,25 @@ Global options apply before the subcommand.
 | `audit`                         | Repositories whose checks failed                 |
 | `releases`                      | Cached release check rows                        |
 | `workflows`                     | Cached workflow check rows                       |
-| `issues`                        | Cached issue check rows                          |
 
-`releases`, `workflows`, and `issues` print a row only when that check was stored. A profile that leaves the check off produces no line.
+`releases` and `workflows` print a row only when that check was stored. A profile that leaves the check off produces no line.
 
 ## Profiles, Configuration, and Cache
 
 | Command                         | Description                                      |
 | ------------------------------- | ------------------------------------------------ |
 | `profile list`                  | Profile names                                    |
-| `profile show NAME`             | Effective checks and standards rules             |
+| `profile show NAME`             | Effective checks                                 |
 | `profile show NAME --resolved`  | Include the profile that set each flag           |
 | `profile tree`                  | Inheritance chains                               |
 | `profile validate`              | Resolve every profile                            |
+| `config init`                   | Write the default files. `--force` overwrites    |
 | `config show`                   | Resolved settings as JSON                        |
 | `config validate`               | Load the files and report the repository count   |
 | `config paths`                  | Configuration and cache paths                    |
 | `cache info`                    | Size and row counts                              |
-| `cache clear`                   | Delete cached data. Prompts unless `--yes`       |
+| `cache clear`                   | Delete cached rows. Prompts unless `--yes`       |
 | `cache clear --repo OWNER/NAME` | Delete one repository's cache                    |
 | `cache vacuum`                  | Rebuild the SQLite file                          |
+| `reset`                         | Delete the cache files. Configuration stays      |
 | `tui`                           | Open the terminal interface                      |
