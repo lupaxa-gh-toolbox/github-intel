@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lupaxa-github-intel"
-version = "0.0.0"
+version = "0.1.0-rc1"
 description = "Monitor an explicit collection of GitHub repositories from the local machine."
 readme = "README.md"
 requires-python = ">=3.11"
