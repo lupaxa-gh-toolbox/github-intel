@@ -340,6 +340,23 @@ class Database:
             runs = await self._count("sync_runs")
         return {"documents": documents, "checks": checks, "sync_runs": runs}
 
+    async def latest_sync_started(self) -> float | None:
+        """
+        Return when the newest synchronisation started.
+
+        Returns:
+            Epoch seconds, or None when no run has been recorded.
+
+        """
+
+        await self.open()
+        async with self._lock:
+            cursor = await self._connection().execute(
+                "SELECT started_at FROM sync_runs ORDER BY started_at DESC LIMIT 1",
+            )
+            row = await cursor.fetchone()
+        return None if row is None else float(row[0])
+
     async def record_run(
         self,
         started: float,

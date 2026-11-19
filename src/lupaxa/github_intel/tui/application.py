@@ -19,7 +19,7 @@ from lupaxa.github_intel.app import Service
 from lupaxa.github_intel.config.paths import default_config_file
 from lupaxa.github_intel.config.profiles import resolve_profile
 from lupaxa.github_intel.dates import DEFAULT_DATE_FORMAT, format_date
-from lupaxa.github_intel.errors import ConfigError
+from lupaxa.github_intel.errors import ConfigError, SyncTooSoon
 from lupaxa.github_intel.views import (
     RepositoryView,
     detail_rows,
@@ -244,6 +244,10 @@ class IntelTui(App[None]):
         except asyncio.CancelledError:
             self.query_one("#summary", Static).update("Synchronisation cancelled.")
             await self._reload()
+            return
+        except SyncTooSoon as exc:
+            self.query_one("#summary", Static).update(str(exc))
+            self.notify(str(exc), severity="warning")
             return
         except ConfigError as exc:
             self._show_config_error(exc)

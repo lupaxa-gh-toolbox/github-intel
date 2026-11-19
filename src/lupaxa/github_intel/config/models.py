@@ -107,6 +107,7 @@ class SyncSettings(_StrictModel):
     concurrency: int = Field(default=10, ge=1)
     timeout: float = Field(default=15, gt=0)
     retries: int = Field(default=3, ge=0)
+    interval: int = Field(default=0, ge=0)
     cache: CacheSettings = Field(default_factory=CacheSettings)
 
 

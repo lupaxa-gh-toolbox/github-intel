@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from typer.testing import CliRunner
 
@@ -15,6 +16,11 @@ from lupaxa.github_intel.constants import (
 )
 
 runner = CliRunner()
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return _ANSI.sub("", text)
 
 
 def test_sync_ctrl_c_exits_without_a_traceback(
@@ -40,9 +46,10 @@ def test_sync_ctrl_c_exits_without_a_traceback(
 
 def test_help_exits_zero() -> None:
     result = runner.invoke(app, ["--help"])
+    output = _plain(result.stdout)
     assert result.exit_code == EXIT_SUCCESS
-    assert "github-intel" in result.stdout
-    assert "--version" in result.stdout
+    assert "github-intel" in output
+    assert "--version" in output
 
 
 def test_version_exits_zero() -> None:

@@ -336,7 +336,11 @@ def config_paths(ctx: typer.Context) -> None:
 @app.command("sync")
 def sync_command(
     ctx: typer.Context,
-    force: bool = typer.Option(False, "--force"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Ignore cache freshness and sync.interval.",
+    ),
     group: str | None = typer.Option(None, "--group"),
     profile: str | None = typer.Option(None, "--profile"),
     repo: str | None = typer.Option(None, "--repo"),

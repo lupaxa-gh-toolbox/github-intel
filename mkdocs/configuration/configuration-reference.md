@@ -35,6 +35,7 @@ sync:
   concurrency: 10
   timeout: 15
   retries: 3
+  interval: 0
   cache:
     enabled: true
     metadata_ttl: 3600
@@ -61,6 +62,7 @@ logging:
 | `sync.concurrency`          | Simultaneous repository requests. Minimum 1. Default 10                            |
 | `sync.timeout`              | HTTP timeout in seconds                                                            |
 | `sync.retries`              | Retries for rate limits and server errors                                          |
+| `sync.interval`             | Seconds after a sync before another is allowed. 0 disables it. `--force` overrides |
 | `sync.cache.enabled`        | When false, synchronisation always fetches                                         |
 | `sync.cache.*_ttl`          | Freshness window in seconds for that category                                      |
 | `logging.level`             | `CRITICAL`, `ERROR`, `WARNING`, `INFO`, or `DEBUG`                                 |

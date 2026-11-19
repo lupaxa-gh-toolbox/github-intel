@@ -43,6 +43,8 @@ github-intel sync [--force] [--group NAME] [--profile NAME]
                   [--fail-on-checks]
 ```
 
+`--force` ignores cache freshness and `sync.interval`. A sync inside `sync.interval` exits 2.
+
 ## Reports and Named Checks
 
 ```text

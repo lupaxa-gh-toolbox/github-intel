@@ -47,7 +47,7 @@ Global options apply before the subcommand.
 | Command                         | Description                                      |
 | ------------------------------- | ------------------------------------------------ |
 | `sync`                          | Refresh stale or missing information             |
-| `sync --force`                  | Ignore freshness windows                         |
+| `sync --force`                  | Ignore freshness windows and `sync.interval`     |
 | `sync --repo OWNER/NAME`        | One repository                                   |
 | `sync --group NAME`             | One group                                        |
 | `sync --profile NAME`           | One profile                                      |

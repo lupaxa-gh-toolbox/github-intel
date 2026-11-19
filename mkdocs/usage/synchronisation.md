@@ -6,6 +6,8 @@ Repositories are visited in the same order as the default list: organisation, th
 
 A category is fetched again when it is missing, when its freshness window has passed, or when `--force` is set. The windows are the `sync.cache.*_ttl` values, in seconds.
 
+`sync.interval` is the wait after one sync before another may start. `0` disables that wait. A sync inside the interval stops with an error. `--force` starts it anyway.
+
 ## What Is Requested
 
 Each enabled repository gets the repository record, then only the data its profile and the summary need.

@@ -20,6 +20,7 @@ __all__ = [
     "IntelError",
     "NotFound",
     "SyncIncomplete",
+    "SyncTooSoon",
 ]
 
 
@@ -51,6 +52,12 @@ class SyncIncomplete(IntelError):
     """Synchronisation finished with failures or was cancelled."""
 
     exit_code = EXIT_SYNC
+
+
+class SyncTooSoon(IntelError):
+    """Another synchronisation was requested inside ``sync.interval``."""
+
+    exit_code = EXIT_CONFIG
 
 
 class NotFound(IntelError):

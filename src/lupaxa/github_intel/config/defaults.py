@@ -45,6 +45,7 @@ sync:
   concurrency: 10
   timeout: 15
   retries: 3
+  interval: 0
   cache:
     enabled: true
     metadata_ttl: 3600

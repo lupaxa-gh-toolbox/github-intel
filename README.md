@@ -72,7 +72,7 @@ github-intel repo show owner name
 | Command                          | Description                                      |
 | -------------------------------- | ------------------------------------------------ |
 | `github-intel sync`              | Refresh stale or missing information             |
-| `github-intel sync --force`      | Ignore cache freshness                           |
+| `github-intel sync --force`      | Ignore cache freshness and `sync.interval`       |
 | `github-intel report`            | Write a Markdown report                          |
 | `github-intel audit`             | Show repositories with failing checks            |
 

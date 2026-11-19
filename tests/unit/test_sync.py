@@ -6,9 +6,11 @@ import asyncio
 from pathlib import Path
 
 import httpx
+import pytest
 
 from lupaxa.github_intel.app import Service
 from lupaxa.github_intel.config.defaults import write_default_files
+from lupaxa.github_intel.errors import SyncTooSoon
 from lupaxa.github_intel.github.rate_limit import RateLimitController
 from lupaxa.github_intel.present import _status_line
 from lupaxa.github_intel.sync.engine import SyncReport
@@ -96,6 +98,30 @@ def test_second_sync_uses_the_cache(tmp_path: Path) -> None:
     assert first.requests > 0
     assert second.requests == 0
     assert second.cache_hits > 0
+
+
+def test_sync_refuses_a_repeat_inside_the_interval(tmp_path: Path) -> None:
+    config = write_default_files(tmp_path / "config")
+    text = config.read_text(encoding="utf-8")
+    config.write_text(
+        text.replace("interval: 0\n", "interval: 3600\n"),
+        encoding="utf-8",
+    )
+    service = Service(config, tmp_path / "data", token_provider=lambda: None)
+    service.add("acme/good", None, "upstream", [])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/releases"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json=_metadata("acme/good"))
+
+    service.transport = httpx.MockTransport(handler)
+    first = asyncio.run(service.sync())
+    with pytest.raises(SyncTooSoon, match="too soon"):
+        asyncio.run(service.sync())
+    second = asyncio.run(service.sync(force=True))
+    assert first.successful == 1
+    assert second.successful == 1
 
 
 def test_sync_visits_repositories_in_list_order(tmp_path: Path) -> None:

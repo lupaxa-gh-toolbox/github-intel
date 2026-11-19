@@ -13,3 +13,5 @@ Scripts should use the process exit status. Human tables are on stdout. Errors a
 | 6    | `--fail-on-checks` found failing checks                          |
 
 A skipped security check is not a failure. **N Ahead** and **No releases** are not failures. **FAIL** and **ERROR** from an enabled standards rule are failures.
+
+Exit 2 is also used when a sync starts inside `sync.interval`. `--force` overrides that wait.

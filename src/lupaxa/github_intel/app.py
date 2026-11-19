@@ -27,7 +27,7 @@ from lupaxa.github_intel.config.paths import (
     default_config_file,
 )
 from lupaxa.github_intel.config.profiles import ResolvedProfile, resolve_profile
-from lupaxa.github_intel.errors import AuthError, ConfigError, NotFound
+from lupaxa.github_intel.errors import AuthError, ConfigError, NotFound, SyncTooSoon
 from lupaxa.github_intel.github.auth import github_cli_token
 from lupaxa.github_intel.github.client import GitHubClient
 from lupaxa.github_intel.logging_setup import configure_logging
@@ -185,7 +185,7 @@ class Service:
         Synchronise enabled repositories.
 
         Args:
-            force: Ignore cache freshness.
+            force: Ignore cache freshness and ``sync.interval``.
             group: Limit to one group.
             profile: Limit to one profile.
             repo: Limit to one repository.
@@ -197,6 +197,7 @@ class Service:
 
         Raises:
             NotFound: ``repo`` is not configured.
+            SyncTooSoon: The previous sync is still inside ``sync.interval``.
 
         """
 
@@ -211,6 +212,12 @@ class Service:
             [token] if token else [],
         )
         database = self._database()
+        try:
+            if not force:
+                await _refuse_if_too_soon(database, loaded.config.sync.interval)
+        except SyncTooSoon:
+            await database.close()
+            raise
         client = GitHubClient(
             api_url=loaded.config.github.api_url,
             token=token,
@@ -388,6 +395,34 @@ class Service:
         sync = loaded.config.sync.model_copy(update={"concurrency": concurrency})
         config = loaded.config.model_copy(update={"sync": sync})
         return replace(loaded, config=config)
+
+
+async def _refuse_if_too_soon(database: Database, interval: int) -> None:
+    if interval <= 0:
+        return
+    started = await database.latest_sync_started()
+    if started is None:
+        return
+    elapsed = time.time() - started
+    if elapsed >= interval:
+        return
+    raise SyncTooSoon(
+        "Synchronisation is too soon. "
+        f"The last sync started {_span(elapsed)} ago. "
+        f"sync.interval is {_span(interval)}. "
+        f"Wait {_span(interval - elapsed)}, or pass --force.",
+    )
+
+
+def _span(seconds: float) -> str:
+    total = max(0, int(seconds + 0.5))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {secs:02d}s"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
 
 
 def _require(loaded: LoadedConfig, repo: str) -> RepositorySpec:
