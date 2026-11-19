@@ -90,7 +90,17 @@ def _column_labels(table: DataTable) -> list[str]:
 def _compact_list(config: Path) -> None:
     text = config.read_text(encoding="utf-8")
     original = (
-        "display:\n  date_format: DD/MM/YYYY HH:mm UTC\n  view: default\n  views: {}\n"
+        "display:\n"
+        "  date_format: DD/MM/YYYY HH:mm UTC\n"
+        "  view: default\n"
+        "  views:\n"
+        "    popularity:\n"
+        "      list:\n"
+        "        - Organisation\n"
+        "        - Repository\n"
+        "        - Stars\n"
+        "        - Watchers\n"
+        "        - Forks\n"
     )
     replacement = (
         "display:\n"

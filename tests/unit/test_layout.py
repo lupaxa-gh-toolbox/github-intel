@@ -31,10 +31,22 @@ def test_shipped_template_declares_the_default_view(tmp_path: Path) -> None:
     config_path = write_default_files(tmp_path)
     loaded = load_config(config_path)
     assert loaded.config.display.view == "default"
-    assert loaded.config.display.views == {}
+    popularity = loaded.config.display.views["popularity"]
+    assert popularity.list == (
+        "Organisation",
+        "Repository",
+        "Stars",
+        "Watchers",
+        "Forks",
+    )
+    assert popularity.detail is None
+    layout = resolve_layout(loaded.config.display, "default", [])
+    assert layout.list_fields == hardcoded_list([])
+    chosen = resolve_layout(loaded.config.display, "popularity", [])
+    assert chosen.list_fields == popularity.list
     lines = config_path.read_text(encoding="utf-8").splitlines()
     assert "  view: default" in lines
-    assert "  views: {}" in lines
+    assert "    popularity:" in lines
 
 
 def test_omitted_views_keep_the_hardcoded_names() -> None:

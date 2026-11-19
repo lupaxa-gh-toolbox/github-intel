@@ -180,7 +180,17 @@ def test_list_json_contains_only_data(tmp_path: Path, monkeypatch) -> None:
 def _display(config: Path, body: str) -> None:
     text = config.read_text(encoding="utf-8")
     needle = (
-        "display:\n  date_format: DD/MM/YYYY HH:mm UTC\n  view: default\n  views: {}\n"
+        "display:\n"
+        "  date_format: DD/MM/YYYY HH:mm UTC\n"
+        "  view: default\n"
+        "  views:\n"
+        "    popularity:\n"
+        "      list:\n"
+        "        - Organisation\n"
+        "        - Repository\n"
+        "        - Stars\n"
+        "        - Watchers\n"
+        "        - Forks\n"
     )
     config.write_text(text.replace(needle, "display:\n" + body), encoding="utf-8")
 

@@ -87,6 +87,8 @@ When `default` does not set `list`, the columns are Organisation, Repository, Vi
 
 ### Popularity
 
+The generated `config.yml` includes this view. `display.view` stays `default`.
+
 ```yaml
 display:
   views:

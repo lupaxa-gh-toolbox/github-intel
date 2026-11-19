@@ -36,7 +36,14 @@ defaults:
 display:
   date_format: DD/MM/YYYY HH:mm UTC
   view: default
-  views: {}
+  views:
+    popularity:
+      list:
+        - Organisation
+        - Repository
+        - Stars
+        - Watchers
+        - Forks
 
 sync:
   concurrency: 10

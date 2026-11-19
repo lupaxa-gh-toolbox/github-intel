@@ -25,7 +25,14 @@ defaults:
 display:
   date_format: DD/MM/YYYY HH:mm UTC
   view: default
-  views: {}
+  views:
+    popularity:
+      list:
+        - Organisation
+        - Repository
+        - Stars
+        - Watchers
+        - Forks
 
 sync:
   concurrency: 10
@@ -72,6 +79,8 @@ JSON, CSV, and Markdown use the selected view's labels and the same cell text as
 `display.view` selects the saved view. Omitted, it is `default`. `display.views` maps a name to `list`, `detail`, or both. The missing side stays the hardcoded layout.
 
 The default list is Organisation, Repository, Visibility, Language, Status, Version, Release date, and Enabled.
+
+The generated file also includes a Popularity list: Organisation, Repository, Stars, Watchers, and Forks. Select it with `--view popularity`.
 
 A written list shows every name, including a check that is off. Pull requests, Issues, and Quality are blank on a list when that check is off.
 
