@@ -211,13 +211,8 @@ class Service:
             self.log_level or loaded.config.logging.level,
             [token] if token else [],
         )
+        await self.assert_sync_allowed(force=force)
         database = self._database()
-        try:
-            if not force:
-                await _refuse_if_too_soon(database, loaded.config.sync.interval)
-        except SyncTooSoon:
-            await database.close()
-            raise
         client = GitHubClient(
             api_url=loaded.config.github.api_url,
             token=token,
@@ -243,6 +238,29 @@ class Service:
         await database.record_run(started, time.time(), _stats(report))
         await database.close()
         return report
+
+    async def assert_sync_allowed(self, *, force: bool = False) -> None:
+        """
+        Refuse a sync that starts inside ``sync.interval``.
+
+        Args:
+            force: Skip the interval check.
+
+        Raises:
+            SyncTooSoon: The previous sync is still inside ``sync.interval``.
+
+        """
+
+        if force:
+            return
+        interval = self.load().config.sync.interval
+        if interval <= 0:
+            return
+        database = self._database()
+        try:
+            await _refuse_if_too_soon(database, interval)
+        finally:
+            await database.close()
 
     async def check_remote(self, repo: str) -> None:
         """
@@ -408,9 +426,9 @@ async def _refuse_if_too_soon(database: Database, interval: int) -> None:
         return
     raise SyncTooSoon(
         "Synchronisation is too soon. "
-        f"The last sync started {_span(elapsed)} ago. "
-        f"sync.interval is {_span(interval)}. "
-        f"Wait {_span(interval - elapsed)}, or pass --force.",
+        f"The last sync started {_span(elapsed)} ago.\n"
+        f"Wait {_span(interval - elapsed)}, or pass --force. "
+        f"sync.interval is {_span(interval)}.",
     )
 
 

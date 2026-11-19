@@ -238,6 +238,15 @@ class IntelTui(App[None]):
         self.push_screen(RepoDetail(view, self.date_format))
 
     async def _run_sync(self) -> None:
+        try:
+            await self.service.assert_sync_allowed()
+        except SyncTooSoon as exc:
+            self.query_one("#summary", Static).update(str(exc))
+            self.notify(str(exc), severity="warning")
+            return
+        except ConfigError as exc:
+            self._show_config_error(exc)
+            return
         self.query_one("#summary", Static).update("Synchronising…")
         try:
             report = await self.service.sync()

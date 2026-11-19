@@ -352,6 +352,7 @@ def sync_command(
 
     del stats
     try:
+        _run(ctx.obj.service.assert_sync_allowed(force=force))
         with syncing() as on_progress:
             report = _run(
                 ctx.obj.service.sync(
